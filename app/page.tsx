@@ -248,15 +248,13 @@ export default function Home() {
     ].join("\n");
 
     try {
-      const response = await fetch("https://formsubmit.co/ajax/hogayip915@gmail.com", {
+      const response = await fetch("/api/send", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
           Accept: "application/json",
         },
         body: JSON.stringify({
-          _subject: "有人填好了你的吃喝玩乐邀请",
-          _template: "box",
           name: name || "匿名朋友",
           message: summary,
         }),
