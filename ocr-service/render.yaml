@@ -3,8 +3,8 @@ services:
     name: document-paddleocr-service
     env: docker
     plan: free
-    dockerfilePath: ./ocr-service/Dockerfile
-    dockerContext: ./ocr-service
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
     healthCheckPath: /health
     envVars:
       - key: PADDLEOCR_LANG
