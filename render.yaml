@@ -1,6 +1,6 @@
 services:
   - type: web
-    name: document-translation-frontend
+    name: document-translation-web
     env: docker
     plan: free
     dockerfilePath: ./Dockerfile
