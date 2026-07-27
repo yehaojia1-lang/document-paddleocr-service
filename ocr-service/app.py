@@ -15,7 +15,7 @@ from PIL import Image, ImageOps
 
 
 MAX_PDF_PAGES = int(os.getenv("MAX_PDF_PAGES", "8"))
-OCR_ENGINE = os.getenv("OCR_ENGINE", "tesseract").lower()
+OCR_ENGINE = "rapidocr" if os.getenv("ENABLE_RAPIDOCR") == "1" else "tesseract"
 ROTATIONS = (0, 90, 270, 180)
 ID_LABELS = (
     "\u59d3\u540d",
