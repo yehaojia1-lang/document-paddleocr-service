@@ -219,7 +219,6 @@
   async function recognizeIdCard(bitmap) {
     const cardCanvas = preprocess(bitmap, detectDocumentRegion(bitmap));
     drawDebug(cardCanvas);
-    const cardBitmap = await createImageBitmap(cardCanvas);
     const regions = [
       { label: "姓名", x: .12, y: .14, w: .34, h: .10, psm: "7" },
       { label: "性别/民族", x: .12, y: .27, w: .42, h: .10, psm: "7" },
@@ -231,7 +230,7 @@
     for (let i = 0; i < regions.length; i++) {
       const r = regions[i];
       setStatus("正在识别 " + r.label, .12 + i * .16);
-      const crop = preprocess(cardBitmap, r, 6);
+      const crop = preprocess(cardCanvas, r, 6);
       const value = normalizeField(r.label, await cloudOcr(crop, r.psm));
       if (value) lines.push(r.label === "性别/民族" ? value : `${r.label}：${value}`);
     }
