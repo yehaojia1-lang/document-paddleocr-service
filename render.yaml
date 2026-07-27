@@ -1,0 +1,13 @@
+services:
+  - type: web
+    name: document-paddleocr-service
+    env: docker
+    plan: free
+    dockerfilePath: ./ocr-service/Dockerfile
+    dockerContext: ./ocr-service
+    healthCheckPath: /health
+    envVars:
+      - key: PADDLEOCR_LANG
+        value: ch
+      - key: MAX_PDF_PAGES
+        value: "8"

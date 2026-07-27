@@ -98,6 +98,14 @@ export default function Home() {
     setReadProgress(0.05);
 
     try {
+      const serverText = await readWithPaddleOcr(file, docType, setReadProgress, setReadStatus).catch(() => "");
+      if (serverText.trim()) {
+        setSourceText(serverText);
+        setReadStatus("PaddleOCR 识别完成，请先校对再翻译");
+        setReadProgress(1);
+        return;
+      }
+
       if (kind === "pdf") {
         setReadStatus("正在提取 PDF 可复制文字");
         const text = await extractPdfTextWithFallback(file, setReadProgress, setReadStatus);
@@ -364,6 +372,33 @@ function detectFileKind(file: File): FileKind {
   if (file.type === "application/pdf" || name.endsWith(".pdf")) return "pdf";
   if (name.endsWith(".docx") || name.endsWith(".doc")) return "word";
   return "unknown";
+}
+
+async function readWithPaddleOcr(
+  file: File,
+  docType: DocType,
+  setProgress: (progress: number) => void,
+  setStatus: (status: string) => void,
+) {
+  setStatus("正在调用 PaddleOCR 识别服务");
+  setProgress(0.12);
+  const form = new FormData();
+  form.set("file", file, file.name || "upload");
+  form.set("mode", docType === "id-card" ? "id" : "full");
+  form.set("docType", docType);
+
+  const response = await fetch("/api/ocr", {
+    method: "POST",
+    body: form,
+  });
+
+  if (!response.ok) {
+    throw new Error("PaddleOCR service unavailable");
+  }
+
+  const data = (await response.json()) as { text?: string; warning?: string };
+  setProgress(0.92);
+  return cleanupOcrText(data.text || "");
 }
 
 async function extractPdfTextWithFallback(
