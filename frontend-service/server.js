@@ -6,6 +6,7 @@ const OCR_SERVICE_URL = (process.env.OCR_SERVICE_URL || "https://document-paddle
 const server = http.createServer(async (req, res) => {
   try {
     const url = new URL(req.url || "/", `http://${req.headers.host}`);
+    if (req.method === "HEAD" && url.pathname === "/") return sendEmpty(res, 200);
     if (req.method === "GET" && url.pathname === "/") return sendHtml(res);
     if (req.method === "GET" && url.pathname === "/health") return sendJson(res, 200, { ok: true });
     if (req.method === "POST" && url.pathname === "/api/ocr") return proxyOcr(req, res);
@@ -141,6 +142,11 @@ function sendJson(res, status, body) {
 function sendText(res, status, text) {
   res.writeHead(status, { "content-type": "text/plain; charset=utf-8" });
   res.end(text);
+}
+
+function sendEmpty(res, status) {
+  res.writeHead(status);
+  res.end();
 }
 
 function sendHtml(res) {
