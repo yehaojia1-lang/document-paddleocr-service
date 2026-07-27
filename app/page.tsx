@@ -29,6 +29,13 @@ type TranslationResult = {
   notes: string[];
 };
 
+type OcrWorker = {
+  recognize: (image: CanvasImageSource | File | Blob, options?: Record<string, unknown>) => Promise<{ data: { text: string } }>;
+  setParameters: (params: Record<string, string>) => Promise<void>;
+};
+
+let sharedOcrWorker: Promise<OcrWorker> | null = null;
+
 const samples: Record<Direction, string> = {
   "en-to-zh":
     "DRIVER LICENSE\nName: Alex Chen\nAddress: 1288 Market Street, Apt 19B, San Francisco, CA 94102, USA\nDate of Birth: 05/18/1992\nClass: C\nExpires: 08/31/2029",
@@ -223,7 +230,21 @@ export default function Home() {
               </button>
             </div>
 
-            <button className="drop-zone" onClick={() => fileInputRef.current?.click()} type="button">
+            <button
+              className="drop-zone"
+              onClick={() => fileInputRef.current?.click()}
+              onDragOver={(event) => {
+                event.preventDefault();
+                event.currentTarget.classList.add("dragging");
+              }}
+              onDragLeave={(event) => event.currentTarget.classList.remove("dragging")}
+              onDrop={(event) => {
+                event.preventDefault();
+                event.currentTarget.classList.remove("dragging");
+                handleFile(event.dataTransfer.files?.[0]);
+              }}
+              type="button"
+            >
               {previewUrl ? (
                 <img alt="已上传图片预览" src={previewUrl} />
               ) : (
@@ -237,6 +258,7 @@ export default function Home() {
               type="file"
               onChange={(event) => handleFile(event.target.files?.[0])}
             />
+            <PasteCatcher onFile={handleFile} />
 
             <div className="progress-wrap">
               <div className="progress-label">
@@ -308,6 +330,31 @@ export default function Home() {
         </section>
       </section>
     </main>
+  );
+}
+
+function PasteCatcher({ onFile }: { onFile: (file: File | undefined) => void }) {
+  return (
+    <div
+      className="paste-catcher"
+      contentEditable
+      role="textbox"
+      tabIndex={0}
+      suppressContentEditableWarning
+      onPaste={(event) => {
+        const file = Array.from(event.clipboardData.files).find((item) => item.type.startsWith("image/"));
+        if (file) {
+          event.preventDefault();
+          onFile(file);
+          event.currentTarget.textContent = "";
+        }
+      }}
+      onInput={(event) => {
+        event.currentTarget.textContent = "";
+      }}
+    >
+      也可以把截图/文件拖进上方区域，或点这里后直接 Ctrl+V 粘贴截图
+    </div>
   );
 }
 
@@ -401,10 +448,12 @@ async function renderPdfPageToCanvas(page: any) {
 }
 
 async function ocrCanvas(canvas: HTMLCanvasElement) {
-  const { recognize } = await import("tesseract.js");
-  const response = await recognize(canvas, "chi_sim+eng", {
+  const worker = await getOcrWorker(() => undefined, () => undefined);
+  await worker.setParameters({
+    tessedit_pageseg_mode: "6",
     preserve_interword_spaces: "1",
   });
+  const response = await worker.recognize(canvas);
   return cleanupOcrText(response.data.text);
 }
 
@@ -413,14 +462,13 @@ async function readImageText(
   setProgress: (progress: number) => void,
   setStatus: (status: string) => void,
 ) {
-  const { recognize } = await import("tesseract.js");
-  const image = await preprocessImage(file);
-  const response = await recognize(image, "chi_sim+eng", {
-    logger: (message: { status?: string; progress?: number }) => {
-      if (typeof message.progress === "number") setProgress(Math.max(0.08, Math.min(0.98, message.progress)));
-      if (message.status) setStatus(readableOcrStatus(message.status));
-    },
+  const image = await preprocessImage(file, { autoCropDocument: true });
+  const worker = await getOcrWorker(setProgress, setStatus);
+  await worker.setParameters({
+    tessedit_pageseg_mode: "6",
+    preserve_interword_spaces: "1",
   });
+  const response = await worker.recognize(image);
 
   return cleanupOcrText(response.data.text);
 }
@@ -430,8 +478,9 @@ async function readChineseIdCard(
   setProgress: (progress: number) => void,
   setStatus: (status: string) => void,
 ) {
-  const { recognize } = await import("tesseract.js");
-  const bitmap = await createImageBitmap(file);
+  const original = await createImageBitmap(file);
+  const cardCanvas = cropAndPreprocess(original, detectLikelyDocumentRegion(original));
+  const bitmap = await createImageBitmap(cardCanvas);
   const regions = [
     { label: "姓名", x: 0.14, y: 0.16, w: 0.26, h: 0.08, psm: "7" },
     { label: "性别/民族", x: 0.14, y: 0.28, w: 0.34, h: 0.08, psm: "7" },
@@ -446,10 +495,12 @@ async function readChineseIdCard(
     setStatus(`正在识别${region.label}`);
     setProgress(0.08 + index * 0.16);
     const cropped = cropAndPreprocess(bitmap, region);
-    const response = await recognize(cropped, "chi_sim+eng", {
+    const worker = await getOcrWorker(setProgress, setStatus);
+    await worker.setParameters({
       tessedit_pageseg_mode: region.psm,
       preserve_interword_spaces: "1",
     });
+    const response = await worker.recognize(cropped);
     const text = cleanupOcrText(response.data.text);
     const normalized = normalizeIdCardField(region.label, text);
     if (normalized) {
@@ -465,9 +516,29 @@ async function readChineseIdCard(
   return ["中华人民共和国居民身份证", ...lines].join("\n");
 }
 
-async function preprocessImage(file: File) {
+async function getOcrWorker(setProgress: (progress: number) => void, setStatus: (status: string) => void) {
+  if (!sharedOcrWorker) {
+    sharedOcrWorker = (async () => {
+      const { createWorker } = await import("tesseract.js");
+      setStatus("首次加载 OCR 中文/英文语言包");
+      return createWorker("chi_sim+eng", 1, {
+        langPath: "https://tessdata.projectnaptha.com/4.0.0",
+        cacheMethod: "write",
+        logger: (message: { status?: string; progress?: number }) => {
+          if (typeof message.progress === "number") setProgress(Math.max(0.04, Math.min(0.95, message.progress)));
+          if (message.status) setStatus(readableOcrStatus(message.status));
+        },
+      }) as Promise<OcrWorker>;
+    })();
+  }
+
+  return sharedOcrWorker;
+}
+
+async function preprocessImage(file: File, options: { autoCropDocument?: boolean } = {}) {
   const bitmap = await createImageBitmap(file);
-  return cropAndPreprocess(bitmap, { x: 0, y: 0, w: 1, h: 1 });
+  const region = options.autoCropDocument ? detectLikelyDocumentRegion(bitmap) : { x: 0, y: 0, w: 1, h: 1 };
+  return cropAndPreprocess(bitmap, region);
 }
 
 function cropAndPreprocess(
@@ -476,7 +547,7 @@ function cropAndPreprocess(
 ) {
   const sourceWidth = Math.round(bitmap.width * region.w);
   const sourceHeight = Math.round(bitmap.height * region.h);
-  const scale = Math.max(2, 1400 / bitmap.width);
+  const scale = Math.min(6, Math.max(2.4, 2300 / Math.max(1, sourceWidth)));
   const canvas = document.createElement("canvas");
   canvas.width = Math.round(sourceWidth * scale);
   canvas.height = Math.round(sourceHeight * scale);
@@ -505,6 +576,57 @@ function cropAndPreprocess(
   }
   context.putImageData(data, 0, 0);
   return canvas;
+}
+
+function detectLikelyDocumentRegion(bitmap: ImageBitmap) {
+  const sampleWidth = 720;
+  const scale = Math.min(1, sampleWidth / bitmap.width);
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.max(1, Math.round(bitmap.width * scale));
+  canvas.height = Math.max(1, Math.round(bitmap.height * scale));
+  const context = canvas.getContext("2d", { willReadFrequently: true });
+  if (!context) return { x: 0, y: 0, w: 1, h: 1 };
+  context.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+  const data = context.getImageData(0, 0, canvas.width, canvas.height).data;
+
+  let minX = canvas.width;
+  let minY = canvas.height;
+  let maxX = 0;
+  let maxY = 0;
+  let count = 0;
+
+  for (let y = 0; y < canvas.height; y += 1) {
+    for (let x = 0; x < canvas.width; x += 1) {
+      const index = (y * canvas.width + x) * 4;
+      const r = data[index];
+      const g = data[index + 1];
+      const b = data[index + 2];
+      const blueDocumentPixel = b > 120 && g > 95 && b > r + 18;
+      if (blueDocumentPixel) {
+        minX = Math.min(minX, x);
+        minY = Math.min(minY, y);
+        maxX = Math.max(maxX, x);
+        maxY = Math.max(maxY, y);
+        count += 1;
+      }
+    }
+  }
+
+  if (count < 80 || maxX <= minX || maxY <= minY) return { x: 0, y: 0, w: 1, h: 1 };
+
+  const padX = Math.round((maxX - minX) * 0.28);
+  const padY = Math.round((maxY - minY) * 0.42);
+  const left = Math.max(0, minX - padX);
+  const top = Math.max(0, minY - padY);
+  const right = Math.min(canvas.width, maxX + padX);
+  const bottom = Math.min(canvas.height, maxY + padY);
+
+  return {
+    x: left / canvas.width,
+    y: top / canvas.height,
+    w: Math.max(0.2, (right - left) / canvas.width),
+    h: Math.max(0.2, (bottom - top) / canvas.height),
+  };
 }
 
 function normalizeIdCardField(label: string, text: string) {
