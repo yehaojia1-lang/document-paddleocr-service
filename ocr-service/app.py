@@ -13,9 +13,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from PIL import Image, ImageEnhance, ImageFilter, ImageOps
 
 try:
-    from rapidocr import RapidOCR
+    from rapidocr_onnxruntime import RapidOCR
 except Exception:
-    RapidOCR = None
+    try:
+        from rapidocr import RapidOCR
+    except Exception:
+        RapidOCR = None
 
 
 MAX_PDF_PAGES = int(os.getenv("MAX_PDF_PAGES", "8"))

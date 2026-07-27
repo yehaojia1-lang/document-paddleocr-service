@@ -3,5 +3,4 @@ uvicorn[standard]==0.32.1
 pillow==10.4.0
 pypdfium2==4.30.0
 python-multipart==0.0.20
-rapidocr==3.9.2
-onnxruntime==1.28.0
+rapidocr-onnxruntime==1.4.4
