@@ -1,0 +1,11 @@
+node_modules
+dist
+.git
+.netlify
+.vinext
+.wrangler
+.sites-package-stage
+.sites-package-stage-v2
+*.tar.gz
+*.log
+ocr-service/__pycache__

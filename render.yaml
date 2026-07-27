@@ -1,13 +1,11 @@
 services:
   - type: web
     name: document-translation-frontend
-    env: node
+    env: docker
     plan: free
-    buildCommand: npm ci && npm run build
-    startCommand: npm run start -- --hostname 0.0.0.0 --port $PORT
+    dockerfilePath: ./Dockerfile.frontend
+    dockerContext: .
     envVars:
-      - key: NODE_VERSION
-        value: "22.16.0"
       - key: OCR_SERVICE_URL
         value: https://document-paddleocr-service.onrender.com
 
