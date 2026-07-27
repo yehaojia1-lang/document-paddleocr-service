@@ -3,7 +3,7 @@ services:
     name: document-translation-web
     env: docker
     plan: free
-    dockerfilePath: ./Dockerfile
+    dockerfilePath: ./frontend-service/Dockerfile
     dockerContext: ./frontend-service
     envVars:
       - key: OCR_SERVICE_URL
