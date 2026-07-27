@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>证件 OCR 测试版</title>
-  <script src="https://cdn.jsdelivr.net/npm/tesseract.js@6/dist/tesseract.min.js"></script>
+  <script src="/ocr/tesseract.min.js"></script>
   <style>
     :root {
       --bg: #f6f7f3;
@@ -200,13 +200,16 @@
 
   async function getWorker() {
     if (!workerPromise) {
-      workerPromise = Tesseract.createWorker("chi_sim+eng", 1, {
-        langPath: "https://tessdata.projectnaptha.com/4.0.0",
+      setStatus("正在从本站加载 OCR 核心和中英文语言包，首次约 20-60 秒", .02);
+      workerPromise = withTimeout(Tesseract.createWorker("chi_sim+eng", 1, {
+        workerPath: "/ocr/worker.min.js",
+        corePath: "/ocr/core",
+        langPath: "/ocr/tessdata",
         cacheMethod: "write",
         logger: message => {
           if (message.status) setStatus(readableStatus(message.status), message.progress || 0.02);
         }
-      });
+      }), 90000, "OCR 加载超时：请刷新重试，或换 Wi‑Fi/电脑端先测。");
     }
     return workerPromise;
   }
@@ -337,6 +340,17 @@
       "initializing api": "正在准备识别",
       "recognizing text": "正在识别文字"
     })[status] || status;
+  }
+  function withTimeout(promise, ms, message) {
+    let timer;
+    const timeout = new Promise((_, reject) => {
+      timer = setTimeout(() => reject(new Error(message)), ms);
+    });
+    return Promise.race([promise, timeout]).finally(() => clearTimeout(timer)).catch(error => {
+      workerPromise = null;
+      setStatus(error.message || "OCR 加载失败", 0);
+      throw error;
+    });
   }
 </script>
 </body>
