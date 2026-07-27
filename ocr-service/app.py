@@ -51,6 +51,18 @@ def health():
     return {"ok": True, "engine": "rapidocr"}
 
 
+@app.get("/")
+def root():
+    return {
+        "ok": True,
+        "engine": "rapidocr",
+        "endpoints": {
+            "health": "/health",
+            "ocr": "POST /ocr",
+        },
+    }
+
+
 @app.post("/ocr")
 async def ocr(
     file: UploadFile = File(...),
