@@ -12,13 +12,19 @@ from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from PIL import Image, ImageEnhance, ImageFilter, ImageOps
 
+try:
+    from rapidocr import RapidOCR
+except Exception:
+    RapidOCR = None
+
 
 MAX_PDF_PAGES = int(os.getenv("MAX_PDF_PAGES", "8"))
-OCR_ENGINE = "tesseract"
+OCR_ENGINE = "rapidocr+tesseract"
 MAX_IMAGE_SIDE = int(os.getenv("MAX_IMAGE_SIDE", "2200"))
 MIN_IMAGE_SIDE = int(os.getenv("MIN_IMAGE_SIDE", "1800"))
 ROTATIONS = (0, 90, 270)
 PSM_MODES = ("6", "11")
+RAPID_OCR = None
 ID_LABELS = (
     "\u59d3\u540d",
     "\u6027\u522b",
@@ -39,6 +45,13 @@ ADDRESS_LABELS = (
     "\u5ba4",
     "\u680b",
 )
+ID_FIELD_REGIONS = (
+    ("name", 0.07, 0.08, 0.55, 0.22),
+    ("sex_ethnicity", 0.07, 0.20, 0.60, 0.34),
+    ("birth", 0.07, 0.32, 0.70, 0.48),
+    ("address", 0.07, 0.45, 0.76, 0.74),
+    ("id_number", 0.07, 0.74, 0.86, 0.96),
+)
 
 app = FastAPI(title="Document OCR Service", version="1.0.0")
 app.add_middleware(
@@ -51,7 +64,7 @@ app.add_middleware(
 
 @app.get("/health")
 def health():
-    return {"ok": True, "engine": OCR_ENGINE}
+    return {"ok": True, "engine": OCR_ENGINE, "rapidocr": RapidOCR is not None}
 
 
 @app.get("/")
@@ -145,15 +158,143 @@ def open_image(data: bytes) -> Image.Image:
 
 def recognize_best(image: Image.Image, mode: str, doc_type: str):
     best = ("", 0, -10_000)
+    is_id = mode == "id" or doc_type == "id-card"
     for rotation in ROTATIONS:
         candidate = image.rotate(rotation, expand=True) if rotation else image
-        text = recognize_image(candidate, mode=mode)
+        text = recognize_id_card(candidate) if is_id else recognize_page(candidate, mode=mode)
         score = score_text(text, mode=mode, doc_type=doc_type)
         if score > best[2]:
             best = (text, rotation, score)
         if score >= 150:
             break
     return best
+
+
+def recognize_page(image: Image.Image, mode: str) -> str:
+    rapid_text = recognize_rapidocr(image)
+    tesseract_text_value = recognize_image(image, mode=mode)
+    return choose_better_text(rapid_text, tesseract_text_value, mode=mode)
+
+
+def recognize_id_card(image: Image.Image) -> str:
+    full_text = recognize_page(image, mode="id")
+    fragments = {"full": full_text}
+    for name, left, top, right, bottom in ID_FIELD_REGIONS:
+        crop = crop_relative(image, left, top, right, bottom)
+        rapid_region = recognize_rapidocr(crop)
+        tesseract_region = recognize_region(crop)
+        fragments[name] = choose_better_text(rapid_region, tesseract_region, mode="id")
+    structured = build_id_card_text(fragments)
+    if structured:
+        return structured
+    return full_text
+
+
+def get_rapidocr():
+    global RAPID_OCR
+    if RapidOCR is None:
+        return None
+    if RAPID_OCR is None:
+        RAPID_OCR = RapidOCR()
+    return RAPID_OCR
+
+
+def recognize_rapidocr(image: Image.Image) -> str:
+    engine = get_rapidocr()
+    if engine is None:
+        return ""
+
+    with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as temp:
+        temp_path = temp.name
+        normalized = normalize_image_size(ImageOps.exif_transpose(image).convert("RGB"))
+        normalized.save(temp_path, "PNG", optimize=True)
+    try:
+        result = engine(temp_path)
+    except Exception:
+        return ""
+    finally:
+        Path(temp_path).unlink(missing_ok=True)
+
+    return cleanup_text(format_rapidocr_result(result))
+
+
+def format_rapidocr_result(result) -> str:
+    items = []
+    raw_items = getattr(result, "txts", None)
+    raw_boxes = getattr(result, "boxes", None)
+    raw_scores = getattr(result, "scores", None)
+    if raw_items is not None:
+        for index, text in enumerate(raw_items):
+            box = raw_boxes[index] if raw_boxes is not None and index < len(raw_boxes) else None
+            score = raw_scores[index] if raw_scores is not None and index < len(raw_scores) else 1
+            items.append((box, text, score))
+    elif isinstance(result, (list, tuple)):
+        sequence = result[0] if len(result) == 2 and isinstance(result[0], list) else result
+        for item in sequence or []:
+            if isinstance(item, (list, tuple)) and len(item) >= 2:
+                box = item[0]
+                value = item[1]
+                if isinstance(value, (list, tuple)) and value:
+                    text = value[0]
+                    score = value[1] if len(value) > 1 else 1
+                else:
+                    text = value
+                    score = item[2] if len(item) > 2 else 1
+                items.append((box, text, score))
+
+    sortable = []
+    for box, text, score in items:
+        if not isinstance(text, str) or not text.strip():
+            continue
+        if isinstance(score, (int, float)) and score < 0.35:
+            continue
+        x, y = box_origin(box)
+        sortable.append((round(y / 12) * 12, x, text.strip()))
+    sortable.sort(key=lambda item: (item[0], item[1]))
+    return "\n".join(text for _, _, text in sortable)
+
+
+def box_origin(box) -> tuple[float, float]:
+    try:
+        points = list(box)
+        xs = [float(point[0]) for point in points]
+        ys = [float(point[1]) for point in points]
+        return min(xs), min(ys)
+    except Exception:
+        return 0.0, 0.0
+
+
+def choose_better_text(first: str, second: str, mode: str) -> str:
+    first_score = score_text(first, mode=mode, doc_type="id-card" if mode == "id" else "")
+    second_score = score_text(second, mode=mode, doc_type="id-card" if mode == "id" else "")
+    return first if first_score >= second_score else second
+
+
+def crop_relative(image: Image.Image, left: float, top: float, right: float, bottom: float) -> Image.Image:
+    width, height = image.size
+    return image.crop((
+        max(0, int(width * left)),
+        max(0, int(height * top)),
+        min(width, int(width * right)),
+        min(height, int(height * bottom)),
+    ))
+
+
+def recognize_region(image: Image.Image) -> str:
+    best = ("", -10_000)
+    for candidate in prepare_candidates(image):
+        with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as temp:
+            temp_path = temp.name
+            candidate.save(temp_path, "PNG", optimize=True)
+        try:
+            for psm in ("6", "7", "11"):
+                text = tesseract_text(temp_path, psm=psm)
+                score = score_text(text, mode="id", doc_type="id-card")
+                if score > best[1]:
+                    best = (text, score)
+        finally:
+            Path(temp_path).unlink(missing_ok=True)
+    return best[0]
 
 
 def recognize_image(image: Image.Image, mode: str) -> str:
@@ -175,8 +316,158 @@ def recognize_image(image: Image.Image, mode: str) -> str:
     return best[0]
 
 
+def build_id_card_text(fragments: dict[str, str]) -> str:
+    all_text = "\n".join(value for value in fragments.values() if value)
+    fields = {
+        "姓名": extract_name(fragments.get("name", ""), all_text),
+        "性别": extract_sex(fragments.get("sex_ethnicity", ""), all_text),
+        "民族": extract_ethnicity(fragments.get("sex_ethnicity", ""), all_text),
+        "出生": extract_birth(fragments.get("birth", ""), all_text),
+        "住址": extract_address(fragments.get("address", ""), all_text),
+        "公民身份号码": extract_id_number(fragments.get("id_number", ""), all_text),
+    }
+    if not any(fields.values()):
+        return cleanup_id_text(fragments.get("full", ""))
+
+    lines = ["中华人民共和国居民身份证"]
+    for label in ("姓名", "性别", "民族", "出生", "住址", "公民身份号码"):
+        value = fields[label]
+        if value:
+            lines.append(f"{label} {value}")
+    raw = cleanup_id_text(fragments.get("full", ""))
+    if raw:
+        lines.append("")
+        lines.append("OCR原文")
+        lines.append(raw)
+    return "\n".join(lines).strip()
+
+
+def extract_name(region: str, all_text: str) -> str:
+    text = normalize_id_text(region)
+    candidates = []
+    for source in (text, normalize_id_text(all_text)):
+        for line in source.splitlines():
+            if "姓名" in line or line.startswith("姓") or line.startswith("名"):
+                value = re.sub(r".*?[姓名]\s*", "", line)
+                value = only_chinese(value)
+                value = strip_id_labels(value)
+                if 2 <= len(value) <= 4:
+                    candidates.append(value)
+        compact = only_chinese(source)
+        compact = strip_id_labels(compact)
+        if 2 <= len(compact) <= 4:
+            candidates.append(compact)
+    return candidates[0] if candidates else ""
+
+
+def extract_sex(region: str, all_text: str) -> str:
+    text = normalize_id_text(f"{region}\n{all_text}")
+    if re.search(r"性别\s*女|别\s*女|女\s*民族", text):
+        return "女"
+    if re.search(r"性别\s*男|别\s*男|男\s*民族", text):
+        return "男"
+    return ""
+
+
+def extract_ethnicity(region: str, all_text: str) -> str:
+    text = normalize_id_text(f"{region}\n{all_text}")
+    match = re.search(r"民族\s*([\u4e00-\u9fff]{1,4})", text)
+    if match:
+        value = strip_id_labels(match.group(1))
+        if value:
+            return value[:2]
+    if "民族汉" in text or re.search(r"[男女]\s*汉", text):
+        return "汉"
+    return ""
+
+
+def extract_birth(region: str, all_text: str) -> str:
+    text = normalize_id_text(f"{region}\n{all_text}")
+    match = re.search(r"((?:19|20)\d{2})\s*年\s*(\d{1,2})\s*月\s*(\d{1,2})\s*日?", text)
+    if match:
+        return f"{match.group(1)}年{int(match.group(2))}月{int(match.group(3))}日"
+    return ""
+
+
+def extract_address(region: str, all_text: str) -> str:
+    sources = [normalize_id_text(region), normalize_id_text(all_text)]
+    for source in sources:
+        lines = [line.strip() for line in source.splitlines() if line.strip()]
+        address_lines = []
+        capture = False
+        for line in lines:
+            line = line.replace("住过", "住址").replace("任址", "住址")
+            if "住址" in line or "地址" in line:
+                capture = True
+                line = re.sub(r".*?(住址|地址)\s*", "", line)
+            if capture:
+                if "公民身份号码" in line or re.search(r"\d{15,18}", line):
+                    break
+                line = re.sub(r"[^\u4e00-\u9fff0-9A-Za-z\-号栋幢室单元年月日省市区县镇乡村路街道弄巷]", "", line)
+                line = strip_id_labels(line)
+                if line:
+                    address_lines.append(line)
+        value = "".join(address_lines)
+        if len(value) >= 6 and any(token in value for token in ADDRESS_LABELS):
+            return value
+    return ""
+
+
+def extract_id_number(region: str, all_text: str) -> str:
+    text = f"{region}\n{all_text}"
+    match = re.search(r"\d{17}[\dXx]|\d{15}", text)
+    return match.group(0).upper() if match else ""
+
+
+def normalize_id_text(text: str) -> str:
+    text = cleanup_text(text)
+    replacements = {
+        "住过": "住址",
+        "任址": "住址",
+        "位址": "住址",
+        "公民身份号": "公民身份号码",
+        "公民身分号码": "公民身份号码",
+        "民 族": "民族",
+        "性 别": "性别",
+        "出 生": "出生",
+        "姓 名": "姓名",
+    }
+    for old, new in replacements.items():
+        text = text.replace(old, new)
+    return text
+
+
+def cleanup_id_text(text: str) -> str:
+    text = normalize_id_text(text)
+    lines = []
+    for line in text.splitlines():
+        line = re.sub(r"[»《》=~`^|{}[\]<>]+", " ", line).strip()
+        if line:
+            lines.append(line)
+    return "\n".join(lines)
+
+
+def only_chinese(text: str) -> str:
+    return "".join(re.findall(r"[\u4e00-\u9fff]", text))
+
+
+def strip_id_labels(text: str) -> str:
+    for label in ("姓名", "性别", "民族", "出生", "住址", "地址", "公民身份号码", "中华人民共和国居民身份证"):
+        text = text.replace(label, "")
+    return text.strip()
+
+
 def prepare_candidates(image: Image.Image) -> list[Image.Image]:
-    image = ImageOps.exif_transpose(image).convert("L")
+    image = normalize_image_size(ImageOps.exif_transpose(image).convert("L"))
+    image = ImageOps.autocontrast(image)
+    image = ImageEnhance.Contrast(image).enhance(1.35)
+    sharp = image.filter(ImageFilter.SHARPEN)
+    threshold = sharp.point(lambda value: 255 if value > 168 else 0)
+    inverted_threshold = ImageOps.invert(sharp).point(lambda value: 255 if value > 168 else 0)
+    return [sharp, threshold, inverted_threshold]
+
+
+def normalize_image_size(image: Image.Image) -> Image.Image:
     width, height = image.size
     longest = max(width, height)
     if longest > MAX_IMAGE_SIDE:
@@ -185,12 +476,7 @@ def prepare_candidates(image: Image.Image) -> list[Image.Image]:
     elif longest < MIN_IMAGE_SIDE:
         ratio = min(MIN_IMAGE_SIDE / longest, 2.5)
         image = image.resize((max(1, int(width * ratio)), max(1, int(height * ratio))))
-    image = ImageOps.autocontrast(image)
-    image = ImageEnhance.Contrast(image).enhance(1.35)
-    sharp = image.filter(ImageFilter.SHARPEN)
-    threshold = sharp.point(lambda value: 255 if value > 168 else 0)
-    inverted_threshold = ImageOps.invert(sharp).point(lambda value: 255 if value > 168 else 0)
-    return [sharp, threshold, inverted_threshold]
+    return image
 
 
 def tesseract_text(image_path: str, psm: str) -> str:
