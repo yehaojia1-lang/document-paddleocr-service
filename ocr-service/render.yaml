@@ -7,7 +7,5 @@ services:
     dockerContext: .
     healthCheckPath: /health
     envVars:
-      - key: PADDLEOCR_LANG
-        value: ch
       - key: MAX_PDF_PAGES
         value: "8"

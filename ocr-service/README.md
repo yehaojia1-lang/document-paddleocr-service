@@ -1,4 +1,4 @@
-# PaddleOCR Service
+# RapidOCR Service
 
 Free OCR backend for the document translation site.
 
@@ -16,7 +16,7 @@ Response:
 
 ```json
 {
-  "engine": "paddleocr",
+  "engine": "rapidocr",
   "text": "recognized text",
   "pages": [{ "index": 1, "text": "...", "rotation": 90, "score": 180 }]
 }
@@ -24,10 +24,10 @@ Response:
 
 ## Deploy
 
-Render can use the root `render.yaml`, or create a Docker web service with:
+Render can use `render.yaml`, or create a Docker web service with:
 
 ```bash
-docker build -t document-paddleocr-service ./ocr-service
+docker build -t document-paddleocr-service .
 docker run -p 8000:8000 document-paddleocr-service
 ```
 

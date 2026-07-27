@@ -11,7 +11,7 @@ import pypdfium2 as pdfium
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from PIL import Image, ImageOps
-from paddleocr import PaddleOCR
+from rapidocr_onnxruntime import RapidOCR
 
 
 MAX_PDF_PAGES = int(os.getenv("MAX_PDF_PAGES", "8"))
@@ -48,7 +48,7 @@ app.add_middleware(
 
 @app.get("/health")
 def health():
-    return {"ok": True, "engine": "paddleocr"}
+    return {"ok": True, "engine": "rapidocr"}
 
 
 @app.post("/ocr")
@@ -80,7 +80,7 @@ async def ocr(
 
     combined = "\n\n".join(f"Page {page['index']}\n{page['text']}" for page in pages).strip()
     return {
-        "engine": "paddleocr",
+        "engine": "rapidocr",
         "text": combined,
         "pages": pages,
         "warning": None if combined else "No reliable text was recognized. Please upload a clearer original file.",
@@ -147,24 +147,23 @@ def recognize_image(image: Image.Image) -> str:
         image.save(temp_path, "JPEG", quality=95)
 
     try:
-        result = get_ocr().ocr(temp_path, cls=True)
+        result, _ = get_ocr()(temp_path)
     finally:
         Path(temp_path).unlink(missing_ok=True)
 
     lines = []
-    for block in result or []:
-        for item in block or []:
-            if len(item) >= 2 and isinstance(item[1], (list, tuple)):
-                text = str(item[1][0]).strip()
-                confidence = float(item[1][1] or 0)
-                if text and confidence >= 0.35:
-                    lines.append(text)
+    for item in result or []:
+        if len(item) >= 3:
+            text = str(item[1]).strip()
+            confidence = float(item[2] or 0)
+            if text and confidence >= 0.35:
+                lines.append(text)
     return cleanup_text("\n".join(lines))
 
 
 @lru_cache(maxsize=1)
 def get_ocr():
-    return PaddleOCR(use_angle_cls=True, lang=os.getenv("PADDLEOCR_LANG", "ch"), show_log=False)
+    return RapidOCR()
 
 
 def score_text(text: str, mode: str, doc_type: str) -> int:
