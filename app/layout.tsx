@@ -13,8 +13,8 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "吃喝玩乐小邀请",
-  description: "帮朋友选好吃什么、喝什么、去哪里玩的小邀请网页。",
+  title: "江南西抹茶之后",
+  description: "一个轻松、不越界的周日下午邀约小页面。",
   icons: {
     icon: "/favicon.svg",
     shortcut: "/favicon.svg",
@@ -28,11 +28,7 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="zh-CN">
-      <body
-        className={`${geistSans.variable} ${geistMono.variable} antialiased`}
-      >
-        {children}
-      </body>
+      <body className={`${geistSans.variable} ${geistMono.variable} antialiased`}>{children}</body>
     </html>
   );
 }
