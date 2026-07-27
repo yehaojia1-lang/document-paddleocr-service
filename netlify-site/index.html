@@ -3,78 +3,341 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>吃喝玩乐小邀请</title>
+  <title>证件 OCR 测试版</title>
+  <script src="https://cdn.jsdelivr.net/npm/tesseract.js@6/dist/tesseract.min.js"></script>
   <style>
-    *{box-sizing:border-box}html{background:#130912}body{margin:0;min-height:100vh;background:radial-gradient(circle at 18% 8%,rgba(241,177,111,.22),transparent 28rem),radial-gradient(circle at 88% 26%,rgba(177,58,95,.28),transparent 24rem),linear-gradient(145deg,#100710,#231121 42%,#120812);color:#fff8f0;font-family:Arial,"Microsoft YaHei",sans-serif}.page{position:relative;min-height:100vh;display:grid;place-items:center;overflow:hidden;padding:28px 16px}.page:before{content:"";position:absolute;inset:0;background:linear-gradient(rgba(255,255,255,.03) 1px,transparent 1px),linear-gradient(90deg,rgba(255,255,255,.025) 1px,transparent 1px);background-size:44px 44px;mask-image:linear-gradient(to bottom,transparent,#000 20%,#000 80%,transparent)}.card{position:relative;z-index:2;width:min(100%,460px);max-height:calc(100vh - 44px);overflow:auto;border:1px solid rgba(229,189,117,.28);border-radius:28px;background:linear-gradient(160deg,rgba(70,27,52,.76),rgba(20,10,20,.92)),radial-gradient(circle at 50% 0%,rgba(229,189,117,.2),transparent 19rem);box-shadow:0 22px 70px rgba(0,0,0,.44),inset 0 1px 0 rgba(255,255,255,.08);padding:28px 22px 24px;scrollbar-width:none}.card::-webkit-scrollbar{display:none}.intro,.success{min-height:min(720px,calc(100vh - 44px));display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:42px 26px}.badge{display:inline-grid;place-items:center;min-width:48px;height:48px;margin:0;padding:0 14px;border-radius:999px;background:linear-gradient(145deg,#6f4c25,#f0cd82 48%,#93662d);color:#fff9e8;font-weight:700;box-shadow:0 10px 24px rgba(0,0,0,.3)}.seal{display:grid;place-items:center;width:92px;height:92px;margin:26px auto;border-radius:50%;background:radial-gradient(circle at 30% 25%,#fff1b8,transparent 16%),linear-gradient(145deg,#8e1531,#d76f5d 52%,#4d1231);border:2px solid rgba(229,189,117,.8);color:#ffe6a3;font-size:42px;box-shadow:0 16px 34px rgba(0,0,0,.32)}.eyebrow{margin:10px 0 12px;color:#e5bd75;font-size:12px;font-weight:700;text-transform:uppercase}h1{margin:0;color:#fff8f0;font-size:clamp(30px,7vw,46px);font-weight:500;line-height:1.18}.lead{margin:16px auto 28px;max-width:34ch;color:rgba(255,248,240,.76);font-size:16px;line-height:1.7}.top{display:flex;align-items:center;justify-content:space-between;gap:18px;margin-bottom:26px}.progress{display:flex;gap:8px}.progress span{width:32px;height:8px;border-radius:999px;background:rgba(255,255,255,.16)}.progress span.active{background:linear-gradient(90deg,#e5bd75,#c94f70)}.grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}.tile{position:relative;min-height:116px;border:1px solid rgba(255,255,255,.13);border-radius:18px;background:rgba(18,9,18,.55);color:rgba(255,248,240,.9);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;padding:14px 10px;transition:.18s;cursor:pointer}.tile.selected{border-color:rgba(229,189,117,.92);background:linear-gradient(145deg,rgba(128,45,80,.85),rgba(47,19,40,.88));box-shadow:inset 0 0 0 1px rgba(229,189,117,.25),0 10px 28px rgba(0,0,0,.22);transform:translateY(-2px)}.tile.selected:after{content:"✓";position:absolute;top:10px;right:10px;display:grid;place-items:center;width:26px;height:26px;border-radius:50%;background:linear-gradient(145deg,#f0d487,#8b622c);color:#fff;font-size:15px;font-weight:700}.icon{font-size:34px}.tile small{color:rgba(255,248,240,.58);font-size:12px}.panel,.fields,.summary{margin-top:18px;border:1px solid rgba(255,255,255,.11);border-radius:18px;background:rgba(13,7,13,.42);padding:16px}.panel h2{margin:0 0 14px;color:#e5bd75;font-size:16px;font-weight:600}.group+.group{margin-top:14px}.group p{margin:0 0 8px;color:rgba(255,248,240,.72);font-size:13px}.chips,.quick{display:flex;flex-wrap:wrap;gap:8px}.chip,.quick button{border:1px solid rgba(229,189,117,.25);border-radius:999px;background:rgba(255,255,255,.05);color:rgba(255,248,240,.8);padding:8px 12px;font-size:13px;cursor:pointer}.chip.active{border-color:rgba(229,189,117,.9);background:rgba(229,189,117,.18);color:#fff9e8}.fields{display:grid;gap:14px}label{display:grid;gap:8px;color:rgba(255,248,240,.72);font-size:14px}input,textarea{width:100%;border:1px solid rgba(255,255,255,.12);border-radius:14px;background:rgba(8,4,8,.5);color:#fff8f0;outline:none;padding:13px 14px}textarea{min-height:96px;resize:vertical}.actions{display:flex;align-items:center;justify-content:center;gap:12px;margin-top:24px}.primary,.ghost{min-height:56px;border-radius:999px;padding:0 28px;cursor:pointer}.primary{min-width:210px;border:0;background:linear-gradient(105deg,#bf4d70,#e3a16d);color:#fff8f0;font-size:20px;box-shadow:0 14px 28px rgba(8,4,8,.34),inset 0 1px 0 rgba(255,255,255,.3)}.ghost{border:1px solid rgba(229,189,117,.25);background:rgba(255,255,255,.04);color:rgba(255,248,240,.82)}.summary{width:100%;display:grid;gap:10px;margin-bottom:24px;text-align:left}.summary div{border-left:3px solid #e5bd75;border-radius:14px;background:rgba(255,255,255,.045);padding:12px 14px}.summary span{display:block;color:rgba(255,248,240,.54);font-size:12px}.summary strong{display:block;margin-top:4px;font-size:17px;font-weight:500}.error{margin:14px 0 0;color:#ffd0d0;text-align:center;font-size:14px}.petal,.rose{position:absolute;z-index:1;pointer-events:none}.petal{width:78px;height:34px;border-radius:90% 10% 90% 10%;background:linear-gradient(145deg,rgba(169,35,65,.7),rgba(66,11,28,.18))}.p1{top:17%;right:8%;rotate:-22deg}.p2{top:43%;left:7%;rotate:18deg}.p3{bottom:16%;right:12%;rotate:34deg}.rose{width:170px;height:170px;border-radius:50%;background:radial-gradient(circle at 42% 42%,#7d0f28 0 16%,transparent 17%),radial-gradient(circle at 58% 40%,#a71938 0 15%,transparent 16%),radial-gradient(circle at 48% 62%,#500816 0 18%,transparent 19%),radial-gradient(circle,rgba(132,13,38,.72),transparent 68%);opacity:.58}.r1{left:-54px;bottom:-42px}.r2{right:-80px;top:20%;opacity:.24}@media(max-width:420px){.page{padding:0}.card{width:100%;min-height:100vh;max-height:none;border-radius:0;border-left:0;border-right:0;padding:26px 18px 28px}.grid{gap:10px}.tile{min-height:104px}.actions{position:sticky;bottom:0;padding:12px 0 0;background:linear-gradient(to top,rgba(19,9,18,.96),rgba(19,9,18,0))}.primary{min-width:188px;font-size:18px}}
+    :root {
+      --bg: #f6f7f3;
+      --panel: #fff;
+      --ink: #17201b;
+      --muted: #61706a;
+      --line: #d7dfd9;
+      --accent: #176a4a;
+      --gold: #d79f38;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: linear-gradient(135deg, #f6f7f3, #edf4ef 58%, #f8f0df);
+      color: var(--ink);
+      font-family: Arial, "Microsoft YaHei", sans-serif;
+    }
+    main {
+      width: min(1100px, 100%);
+      margin: 0 auto;
+      padding: 18px;
+    }
+    header, section {
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: rgba(255,255,255,.92);
+      box-shadow: 0 18px 54px rgba(23,32,27,.08);
+    }
+    header { padding: 22px; margin-bottom: 14px; }
+    h1 { margin: 0; font-size: clamp(30px, 8vw, 56px); line-height: 1; }
+    p { color: var(--muted); line-height: 1.65; }
+    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+    section { padding: 16px; }
+    .drop {
+      display: grid;
+      place-items: center;
+      min-height: 280px;
+      border: 2px dashed #aab9b0;
+      border-radius: 10px;
+      background: #fbfcfa;
+      color: var(--accent);
+      font-weight: 800;
+      text-align: center;
+      overflow: hidden;
+    }
+    .drop.dragging { border-color: var(--accent); box-shadow: inset 0 0 0 4px rgba(23,106,74,.14); }
+    .drop img { max-width: 100%; max-height: 420px; object-fit: contain; }
+    .buttons { display: flex; flex-wrap: wrap; gap: 10px; margin: 12px 0; }
+    button, select, input::file-selector-button {
+      border: 0;
+      border-radius: 8px;
+      background: var(--accent);
+      color: #fff;
+      min-height: 44px;
+      padding: 0 16px;
+      font: inherit;
+      font-weight: 800;
+    }
+    .secondary { background: #eef3ec; color: var(--accent); border: 1px solid var(--line); }
+    select {
+      background: #fff;
+      color: var(--ink);
+      border: 1px solid var(--line);
+    }
+    input[type=file] { width: 100%; margin: 12px 0; }
+    textarea {
+      width: 100%;
+      min-height: 360px;
+      resize: vertical;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 12px;
+      font: 15px/1.55 Consolas, "Microsoft YaHei", monospace;
+    }
+    .status {
+      display: flex;
+      justify-content: space-between;
+      gap: 10px;
+      color: var(--muted);
+      font-size: 13px;
+      margin: 10px 0;
+    }
+    .bar { height: 8px; border-radius: 999px; background: #e2e9e4; overflow: hidden; }
+    .bar span { display: block; width: 0%; height: 100%; background: linear-gradient(90deg, var(--accent), var(--gold)); transition: width .2s; }
+    .paste {
+      min-height: 42px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 12px;
+      color: var(--muted);
+      outline: none;
+      margin-top: 10px;
+    }
+    .hint { font-size: 13px; color: var(--muted); }
+    canvas { max-width: 100%; border: 1px solid var(--line); border-radius: 8px; margin-top: 10px; background: #fff; }
+    @media (max-width: 800px) {
+      main { padding: 10px; }
+      .grid { grid-template-columns: 1fr; }
+      .drop { min-height: 220px; }
+      textarea { min-height: 300px; }
+    }
   </style>
 </head>
 <body>
-  <form name="outing-invite" method="POST" action="/" data-netlify="true" netlify-honeypot="bot-field" style="display:none">
-    <input type="hidden" name="form-name" value="outing-invite" />
-    <input name="bot-field" />
-    <input name="name" />
-    <textarea name="summary"></textarea>
-    <input name="eat" />
-    <input name="brands" />
-    <input name="drink" />
-    <input name="play" />
-    <input name="place" />
-    <input name="time" />
-    <textarea name="message"></textarea>
-    <input name="custom" />
-  </form>
-  <main class="page">
-    <div class="petal p1"></div><div class="petal p2"></div><div class="petal p3"></div><div class="rose r1"></div><div class="rose r2"></div>
-    <section id="app" class="card intro"></section>
-  </main>
-  <script>
-    const steps = [
-      {id:"eat",eyebrow:"第一封小纸条",title:"今天想吃点什么?",subtitle:"可以多选，点开菜品还能挑品牌。",options:[
-        ["fried-chicken","炸鸡","🍗","脆皮快乐局",["肯德基","麦当劳","德克士","华莱士","正新鸡排","塔斯汀","叫了只炸鸡","派乐汉堡","贝克汉堡","鸡光宝盒","超级鸡车","吮指炸鸡"]],
-        ["hotpot","火锅","🍲","",["海底捞","呷哺呷哺","凑凑","小龙坎","蜀大侠","大龙燚","谭鸭血","巴奴毛肚火锅"]],
-        ["bbq","烤肉","🥩","",["韩宫宴","姜虎东白丁","很久以前羊肉串","九田家","酒拾烤肉","肉本家","西塔老太太"]],
-        ["sushi","寿司","🍣","",["争鲜","元气寿司","寿司郎","鮨政","N多寿司","鲜目录"]],
-        ["noodles","面/粉","🍜","",["遇见小面","和府捞面","张拉拉兰州手撕牛肉面","陈香贵","马记永","五谷渔粉"]],
-        ["snack","小吃夜宵","🥟","",["绝味鸭脖","周黑鸭","煌上煌","紫燕百味鸡","夸父炸串","正新鸡排"]],
-        ["dessert","甜品蛋糕","🍰","",["好利来","鲍师傅","泸溪河","DQ","哈根达斯","满记甜品","许留山","Lady M","Awfully Chocolate","爸爸糖手工吐司"]],
-        ["bakery","面包烘焙","🥐","",["山崎面包","巴黎贝甜","85度C","面包新语","原麦山丘","Ole精品超市烘焙","本地独立面包店"]]
-      ]},
-      {id:"drink",eyebrow:"第二封小纸条",title:"喝点什么配今天?",subtitle:"奶茶、咖啡、微醺都可以。",options:[
-        ["milk-tea","奶茶","🧋","",["喜茶","奈雪的茶","霸王茶姬","茶百道","沪上阿姨","古茗","一点点","CoCo都可","蜜雪冰城","爷爷不泡茶","茉莉奶白"]],
-        ["coffee","咖啡","☕","",["瑞幸咖啡","星巴克","库迪咖啡","Manner","M Stand","Tims天好咖啡","Seesaw","Peet's Coffee","Grid Coffee","本地独立咖啡店"]],
-        ["fruit-tea","果茶","🍋","",["LINLEE","茶救星球","7分甜","书亦烧仙草","悸动烧仙草","甜啦啦"]],
-        ["ice","冰淇淋","🍦","",["DQ","哈根达斯","蜜雪冰城","钟薛高","Gelato品牌随缘"]],
-        ["bar","小酒馆","🍹","",["COMMUNE","海伦司","胡桃里","Perry's","本地清吧"]],
-        ["other-drink","其他","💭","",[]]
-      ]},
-      {id:"play",eyebrow:"第三封小纸条",title:"然后去干什么?",subtitle:"饭后不赶场，快乐要续杯。",options:[
-        ["movie","看电影","🎬","",[]],["ktv","KTV","🎤","",["纯K","好乐迪","唱吧麦颂","温莎KTV","魅KTV","米乐星","本地量贩KTV","Livehouse包厢"]],["board-game","桌游","🎲","",[]],["escape","密室/剧本","🗝️","",[]],
-        ["dessert-hunt","甜品探店","🍮","",["好利来","鲍师傅","Lady M","满记甜品","许留山","DQ","本地网红甜品店","小红书收藏店"]],
-        ["cafe-hunt","咖啡探店","☕","",["Manner","M Stand","Seesaw","Peet's Coffee","星巴克臻选","本地独立咖啡店","露营风咖啡","宠物友好咖啡店"]],
-        ["photo","拍照打卡","📸","",["海马体","天真蓝","人生四格","大头贴机","街拍路线","城市夜景点"]],
-        ["arcade","电玩城","🕹️","",["风云再起","汤姆熊","城市英雄","反斗乐园","抓娃娃店","Switch体验馆"]],
-        ["live","演出/Live","🎧","",["Livehouse","脱口秀","音乐节","清吧驻唱","小剧场","展演空间"]],
-        ["handmade","手作体验","🎨","",["陶艺","香薰蜡烛","Tufting","银饰DIY","烘焙课","流体熊"]],
-        ["relax","按摩放松","💆","",["泰式按摩","足疗","采耳","SPA","头疗","肩颈放松"]],["walk","散步压马路","🌙","",[]],["mall","逛商场","🛍️","",[]],["chill","随便坐坐","🫧","",[]]
-      ]},
-      {id:"place",eyebrow:"第四封小纸条",title:"想在哪里见面?",subtitle:"先定氛围，具体地址后面再聊。",options:[
-        ["mall-place","商场","🛍️","",[]],["restaurant-place","餐厅","🍽️","",[]],["cafe-place","咖啡馆","☕","",["独立咖啡馆","露台咖啡","宠物友好","安静聊天","适合拍照","商场咖啡"]],["cinema-place","电影院","🎞️","",[]],
-        ["park-place","公园","🌳","",[]],["museum-place","展览馆","🖼️","",["美术馆","博物馆","摄影展","潮流展","市集展","沉浸式展览"]],["studio-place","体验馆","🎨","",["手作店","香薰店","陶艺店","电玩城","桌游店","KTV"]],["near-me","我家附近","🏠","",[]],["other-place","其他","📍","",[]]
-      ]},
-      {id:"time",eyebrow:"最后一封小纸条",title:"什么时候最合适?",subtitle:"选完就把这份回应寄给我。",options:[["tonight","今天晚上","🌙","",[]],["tomorrow","明天下午","☀️","",[]],["weekend","周末全天","📅","",[]],["next-week","下周都可以","💞","",[]],["ask","再对时间","⏰","",[]],["surprise","你来定","🎁","",[]]]}
-    ].map(s=>({...s,options:s.options.map(o=>({id:o[0],label:o[1],icon:o[2],note:o[3],brands:o[4]}))}));
-    const state={started:false,sent:false,step:0,picks:{eat:[],brands:[],drink:[],play:[],place:[],time:[]},name:"",message:"",custom:"",error:""};
-    const app=document.getElementById("app");
-    const allOptions=()=>steps.flatMap(s=>s.options);
-    const labels=(ids)=>ids.map(id=>(allOptions().find(o=>o.id===id)||{}).label||id);
-    const brandGroups=()=>allOptions().filter(o=>(state.picks.eat.includes(o.id)||state.picks.drink.includes(o.id)||state.picks.play.includes(o.id)||state.picks.place.includes(o.id))&&o.brands&&o.brands.length);
-    function toggle(key,val){const a=state.picks[key];state.picks[key]=a.includes(val)?a.filter(x=>x!==val):a.concat(val);render();}
-    function renderIntro(){app.className="card intro";app.innerHTML=`<p class="badge">Moment 01</p><div class="seal">♥</div><p class="eyebrow">A LITTLE PLAN</p><h1>有人想约你出去吃喝玩乐</h1><p class="lead">收下这份可爱的邀请，帮我选好今天吃什么、喝什么、去哪里玩。</p><button class="primary" onclick="state.started=true;render()">轻触打开 <span>→</span></button>`}
-    function renderSuccess(){app.className="card success";const p=state.picks;app.innerHTML=`<p class="badge">Sent</p><div class="seal">✓</div><p class="eyebrow">回应已经送达</p><h1>这一刻，值得被记住。</h1><p class="lead">你的答案已经悄悄飞到我的邮箱里了。现在只差把这场小出逃变成真的。</p><div class="summary">${item("想吃",labels(p.eat).concat(p.brands).join("、"))}${item("想喝",labels(p.drink).join("、"))}${item("想玩",labels(p.play).join("、"))}${item("时间",labels(p.time).join("、"))}</div><button class="primary" onclick="location.reload()">我也想做一个 ✨</button>`}
-    function item(t,v){return `<div><span>${t}</span><strong>${v||"还想保密"}</strong></div>`}
-    function renderStep(){app.className="card";const s=steps[state.step], p=state.picks[s.id];const groups=brandGroups();app.innerHTML=`<div class="top"><p class="badge">${String(state.step+1).padStart(2,"0")}</p><div class="progress">${steps.map((_,i)=>`<span class="${i<=state.step?"active":""}"></span>`).join("")}</div></div><p class="eyebrow">${s.eyebrow}</p><h1>${s.title}</h1><p class="lead">${s.subtitle}</p><div class="grid">${s.options.map(o=>`<button class="tile ${p.includes(o.id)?"selected":""}" onclick="toggle('${s.id}','${o.id}')"><span class="icon">${o.icon}</span><span>${o.label}</span>${o.note?`<small>${o.note}</small>`:""}</button>`).join("")}</div>${groups.length&&state.step<=3?`<section class="panel"><h2>顺手挑几个品牌/类型</h2>${groups.map(g=>`<div class="group"><p>${g.label}</p><div class="chips">${g.brands.map(b=>`<button class="chip ${state.picks.brands.includes(b)?"active":""}" onclick="toggle('brands','${b}')">${b}</button>`).join("")}</div></div>`).join("")}</section>`:""}${state.step===steps.length-1?fields():""}<div class="actions">${state.step>0?`<button class="ghost" onclick="state.step--;render()">上一步</button>`:""}${state.step===steps.length-1?`<button class="primary" onclick="send()">送出回应 <span>→</span></button>`:`<button class="primary" onclick="state.step++;render()">下一步 <span>→</span></button>`}</div>${state.error?`<p class="error">${state.error}</p>`:""}`}
-    function fields(){return `<section class="fields"><label>你的名字<input id="name" value="${state.name}" oninput="state.name=this.value" placeholder="比如：今天超想出门的人"></label><label>想对我说点什么<textarea id="message" oninput="state.message=this.value" placeholder="早就想去了...">${state.message}</textarea></label><div class="quick">${["早就想去了","等你好久了","必须答应","让我先看看时间"].map(x=>`<button onclick="state.message='${x}';render()">${x}</button>`).join("")}</div><label>其他补充<input id="custom" value="${state.custom}" oninput="state.custom=this.value" placeholder="地点、预算、忌口、想避开的店..."></label></section>`}
-    async function send(){const p=state.picks;const summary=[`填写人: ${state.name||"没有署名"}`,`想吃: ${labels(p.eat).join("、")||"未选择"}`,`品牌偏好: ${p.brands.join("、")||"未选择"}`,`想喝: ${labels(p.drink).join("、")||"未选择"}`,`想玩: ${labels(p.play).join("、")||"未选择"}`,`地点: ${labels(p.place).join("、")||"未选择"}`,`时间: ${labels(p.time).join("、")||"未选择"}`,`想说的话: ${state.message||"没有留言"}`,`补充: ${state.custom||"没有补充"}`].join("\n");try{const email=["hogayip915","gmail.com"].join("@");const r=await fetch("https://formsubmit.co/ajax/"+email,{method:"POST",headers:{"Content-Type":"application/json",Accept:"application/json"},body:JSON.stringify({_subject:"有人填好了你的吃喝玩乐邀请",_template:"box",name:state.name||"匿名朋友",message:summary})});const result=await r.json().catch(()=>({}));if(!r.ok)throw Error();if(result.success==="false"&&String(result.message||"").includes("Activation")){state.error="我已经把激活邮件发到邮箱了，先点邮箱里的 Activate Form，再回来送出回应。";render();return}state.sent=true;render()}catch(e){state.error="刚才没有寄出去，可以再点一次，或者先截图发给我。";render()}}
-    function render(){if(!state.started)return renderIntro();if(state.sent)return renderSuccess();renderStep()}render();
-  </script></body>
+<main>
+  <header>
+    <h1>证件 OCR 测试版</h1>
+    <p>请尽量上传“原始证件图片”，不要上传网页截图里的小证件。这个版本会加载中文+英文 OCR 包，自动裁剪疑似证件区域，放大增强后识别。</p>
+  </header>
+  <div class="grid">
+    <section>
+      <h2>上传 / 拖拽 / 粘贴</h2>
+      <label>
+        识别模式
+        <select id="mode">
+          <option value="id">中国身份证字段识别</option>
+          <option value="full">整图完整识别</option>
+        </select>
+      </label>
+      <input id="file" type="file" accept="image/*" />
+      <div id="drop" class="drop">把图片拖到这里，或选择文件</div>
+      <div id="paste" class="paste" contenteditable="true">手机可选择文件上传；电脑可点这里后 Ctrl+V 粘贴截图</div>
+      <div class="buttons">
+        <button id="run" type="button">开始 OCR</button>
+        <button id="copy" class="secondary" type="button">复制识别文本</button>
+      </div>
+      <p class="hint">提示：如果证件只占照片很小一块，识别会变差。请尽量裁到证件占画面 70% 以上。</p>
+      <canvas id="debug"></canvas>
+    </section>
+    <section>
+      <h2>识别结果</h2>
+      <div class="status"><span id="status">等待图片</span><strong id="percent">0%</strong></div>
+      <div class="bar"><span id="bar"></span></div>
+      <textarea id="text" placeholder="OCR 文字会出现在这里，可手动校对后再复制到翻译工具。"></textarea>
+    </section>
+  </div>
+</main>
+<script>
+  const fileInput = document.getElementById("file");
+  const drop = document.getElementById("drop");
+  const paste = document.getElementById("paste");
+  const run = document.getElementById("run");
+  const copy = document.getElementById("copy");
+  const textArea = document.getElementById("text");
+  const statusEl = document.getElementById("status");
+  const percentEl = document.getElementById("percent");
+  const bar = document.getElementById("bar");
+  const debug = document.getElementById("debug");
+  const mode = document.getElementById("mode");
+  let currentFile = null;
+  let currentBitmap = null;
+  let workerPromise = null;
+
+  function setStatus(text, progress) {
+    statusEl.textContent = text;
+    if (typeof progress === "number") {
+      const value = Math.max(0, Math.min(100, Math.round(progress * 100)));
+      percentEl.textContent = value + "%";
+      bar.style.width = value + "%";
+    }
+  }
+
+  async function setFile(file) {
+    if (!file) return;
+    currentFile = file;
+    currentBitmap = await createImageBitmap(file);
+    drop.innerHTML = "";
+    const img = document.createElement("img");
+    img.src = URL.createObjectURL(file);
+    img.alt = "上传图片预览";
+    drop.appendChild(img);
+    setStatus("图片已载入，可开始 OCR", 0);
+  }
+
+  fileInput.addEventListener("change", () => setFile(fileInput.files[0]));
+  drop.addEventListener("dragover", event => { event.preventDefault(); drop.classList.add("dragging"); });
+  drop.addEventListener("dragleave", () => drop.classList.remove("dragging"));
+  drop.addEventListener("drop", event => {
+    event.preventDefault();
+    drop.classList.remove("dragging");
+    setFile(event.dataTransfer.files[0]);
+  });
+  paste.addEventListener("paste", event => {
+    const file = Array.from(event.clipboardData.files).find(item => item.type.startsWith("image/"));
+    if (file) {
+      event.preventDefault();
+      paste.textContent = "已粘贴截图";
+      setFile(file);
+    }
+  });
+  copy.addEventListener("click", async () => navigator.clipboard.writeText(textArea.value));
+  run.addEventListener("click", recognize);
+
+  async function getWorker() {
+    if (!workerPromise) {
+      workerPromise = Tesseract.createWorker("chi_sim+eng", 1, {
+        langPath: "https://tessdata.projectnaptha.com/4.0.0",
+        cacheMethod: "write",
+        logger: message => {
+          if (message.status) setStatus(readableStatus(message.status), message.progress || 0.02);
+        }
+      });
+    }
+    return workerPromise;
+  }
+
+  async function recognize() {
+    if (!currentBitmap) {
+      setStatus("请先上传图片", 0);
+      return;
+    }
+    textArea.value = "";
+    const worker = await getWorker();
+    if (mode.value === "id") {
+      textArea.value = await recognizeIdCard(worker, currentBitmap);
+    } else {
+      const canvas = preprocess(currentBitmap, detectDocumentRegion(currentBitmap));
+      drawDebug(canvas);
+      await worker.setParameters({ tessedit_pageseg_mode: "6", preserve_interword_spaces: "1" });
+      const result = await worker.recognize(canvas);
+      textArea.value = cleanup(result.data.text);
+    }
+    setStatus("识别完成", 1);
+  }
+
+  async function recognizeIdCard(worker, bitmap) {
+    const cardCanvas = preprocess(bitmap, detectDocumentRegion(bitmap));
+    drawDebug(cardCanvas);
+    const cardBitmap = await createImageBitmap(cardCanvas);
+    const regions = [
+      { label: "姓名", x: .12, y: .14, w: .34, h: .10, psm: "7" },
+      { label: "性别/民族", x: .12, y: .27, w: .42, h: .10, psm: "7" },
+      { label: "出生", x: .12, y: .39, w: .50, h: .10, psm: "7" },
+      { label: "住址", x: .12, y: .50, w: .58, h: .23, psm: "6" },
+      { label: "公民身份号码", x: .25, y: .80, w: .62, h: .12, psm: "7" }
+    ];
+    const lines = ["中华人民共和国居民身份证"];
+    for (let i = 0; i < regions.length; i++) {
+      const r = regions[i];
+      setStatus("正在识别 " + r.label, .12 + i * .16);
+      const crop = preprocess(cardBitmap, r, 6);
+      await worker.setParameters({ tessedit_pageseg_mode: r.psm, preserve_interword_spaces: "1" });
+      const result = await worker.recognize(crop);
+      const value = normalizeField(r.label, cleanup(result.data.text));
+      if (value) lines.push(r.label === "性别/民族" ? value : `${r.label}：${value}`);
+    }
+    return lines.join("\n");
+  }
+
+  function preprocess(bitmap, region, forcedScale) {
+    const sw = Math.round(bitmap.width * region.w);
+    const sh = Math.round(bitmap.height * region.h);
+    const scale = forcedScale || Math.min(7, Math.max(3, 2600 / Math.max(1, sw)));
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.round(sw * scale);
+    canvas.height = Math.round(sh * scale);
+    const ctx = canvas.getContext("2d", { willReadFrequently: true });
+    ctx.imageSmoothingEnabled = true;
+    ctx.drawImage(bitmap, Math.round(bitmap.width * region.x), Math.round(bitmap.height * region.y), sw, sh, 0, 0, canvas.width, canvas.height);
+    const img = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    for (let i = 0; i < img.data.length; i += 4) {
+      const gray = img.data[i] * .3 + img.data[i + 1] * .59 + img.data[i + 2] * .11;
+      const v = gray > 184 ? 255 : Math.max(0, gray - 45);
+      img.data[i] = v; img.data[i + 1] = v; img.data[i + 2] = v;
+    }
+    ctx.putImageData(img, 0, 0);
+    return canvas;
+  }
+
+  function detectDocumentRegion(bitmap) {
+    const w = 720;
+    const scale = Math.min(1, w / bitmap.width);
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.round(bitmap.width * scale);
+    canvas.height = Math.round(bitmap.height * scale);
+    const ctx = canvas.getContext("2d", { willReadFrequently: true });
+    ctx.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+    const data = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
+    let minX = canvas.width, minY = canvas.height, maxX = 0, maxY = 0, count = 0;
+    for (let y = 0; y < canvas.height; y++) {
+      for (let x = 0; x < canvas.width; x++) {
+        const i = (y * canvas.width + x) * 4;
+        const r = data[i], g = data[i + 1], b = data[i + 2];
+        if ((b > 115 && g > 90 && b > r + 14) || (r > 180 && g > 180 && b > 170)) {
+          minX = Math.min(minX, x); minY = Math.min(minY, y);
+          maxX = Math.max(maxX, x); maxY = Math.max(maxY, y);
+          count++;
+        }
+      }
+    }
+    if (count < 120 || maxX <= minX || maxY <= minY) return { x: 0, y: 0, w: 1, h: 1 };
+    const padX = Math.round((maxX - minX) * .18);
+    const padY = Math.round((maxY - minY) * .22);
+    const left = Math.max(0, minX - padX), top = Math.max(0, minY - padY);
+    const right = Math.min(canvas.width, maxX + padX), bottom = Math.min(canvas.height, maxY + padY);
+    return { x: left / canvas.width, y: top / canvas.height, w: (right - left) / canvas.width, h: (bottom - top) / canvas.height };
+  }
+
+  function normalizeField(label, text) {
+    const compact = text.replace(/\s+/g, "");
+    if (!compact) return "";
+    if (label === "性别/民族") {
+      const sex = compact.includes("女") ? "女" : compact.includes("男") ? "男" : "待确认";
+      const ethnicity = compact.includes("汉") ? "汉" : "待确认";
+      return `性别：${sex}\n民族：${ethnicity}`;
+    }
+    if (label === "出生") {
+      const m = compact.match(/(\d{4})\D?(\d{1,2})\D?(\d{1,2})/);
+      return m ? `${m[1]}年${Number(m[2])}月${Number(m[3])}日` : text;
+    }
+    if (label === "公民身份号码") {
+      return compact.match(/\d{15,18}[\dXx]?/)?.[0] || text;
+    }
+    return text;
+  }
+
+  function cleanup(text) {
+    return text.replace(/[|]+/g, " ").split(/\r?\n/).map(line => line.trim()).filter(Boolean).join("\n");
+  }
+  function drawDebug(canvas) {
+    debug.width = canvas.width;
+    debug.height = canvas.height;
+    debug.getContext("2d").drawImage(canvas, 0, 0);
+  }
+  function readableStatus(status) {
+    return ({
+      "loading tesseract core": "正在加载 OCR 核心",
+      "initializing tesseract": "正在初始化 OCR",
+      "loading language traineddata": "正在加载中文/英文语言包",
+      "initializing api": "正在准备识别",
+      "recognizing text": "正在识别文字"
+    })[status] || status;
+  }
+</script>
+</body>
 </html>
