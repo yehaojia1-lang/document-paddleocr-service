@@ -1,3 +1,5 @@
+import { pinyin } from "pinyin-pro";
+
 type Direction = "en-to-zh" | "zh-to-en";
 type Provider = "auto" | "openai" | "deepseek" | "offline";
 
@@ -7,29 +9,33 @@ type FieldResult = {
   translation: string;
 };
 
+type ParsedField = {
+  label: string;
+  value: string;
+};
+
 const systemRules = `You are a professional certified document translator.
 Rules:
+- Translate content only. Do not reproduce Word layout, tables, fonts, borders, or original formatting.
 - Translate every visible item. Do not omit labels, numbers, dates, addresses, footers, notes, stamps, signatures, QR/barcode captions, or back-side instructions.
-- This product translates content only. Do not attempt to reproduce Word layout, tables, fonts, or original formatting.
 - Use the user's standard template expressions where relevant, especially for graduation certificates, degree certificates, identity cards, and birth certificates.
 - Preserve document numbers, ID numbers, license numbers, postal codes, URLs, email addresses, and codes exactly.
-- Translate addresses completely, including country, state/province, city, district, street, road type, building, unit, room, mailbox, and postal code.
-- For English-to-Chinese, do not invent Chinese personal names when no confirmed Chinese name is provided. Keep the English name.
-- For Chinese-to-English, default Chinese personal names to given name before surname unless the source clearly uses another official spelling.
+- Address order is mandatory: English output uses small-to-large order; Chinese output uses large-to-small order.
+- For Chinese-to-English names, default to given name before surname unless the user/source supplies an official spelling.
+- For English-to-Chinese names, do not invent Chinese names when no confirmed Chinese name is provided. Keep the English name.
 - Dates: use Chinese date format for Chinese output; use Month D, YYYY for English output unless the source is a numeric table-like field.
-- Stamps may follow source/template wording as (sealed), (stamped), or (signature). Embossed seals should be rendered as (with embossed seal).
 - Illegible or uncertain content must be marked as 待确认 for Chinese output or illegible for English output. Do not guess.
 - Return only JSON with keys: mode, title, summary, fields, polished, notes. fields is an array of {label, source, translation}.`;
 
 export async function POST(request: Request) {
   const payload = await request.json().catch(() => ({}));
   const text = typeof payload.text === "string" ? payload.text : "";
-  const direction = payload.direction === "zh-to-en" ? "zh-to-en" : "en-to-zh";
+  const direction: Direction = payload.direction === "en-to-zh" ? "en-to-zh" : "zh-to-en";
   const provider = normalizeProvider(payload.provider);
-  const docType = typeof payload.docType === "string" ? payload.docType : "document";
+  const docType = typeof payload.docType === "string" ? payload.docType : "other";
 
   if (!text.trim()) {
-    return Response.json(offlineTranslate("", direction, "文本为空"));
+    return Response.json(offlineTranslate("", direction, docType, "文本为空"));
   }
 
   const selected = selectProvider(provider);
@@ -44,12 +50,12 @@ export async function POST(request: Request) {
     if (modelResult) return Response.json(modelResult);
   }
 
-  if (provider === "auto" && selected !== "openai" && process.env.OPENAI_API_KEY) {
+  if (provider === "auto" && process.env.OPENAI_API_KEY) {
     const modelResult = await callOpenAI(text, direction, docType).catch(() => null);
     if (modelResult) return Response.json(modelResult);
   }
 
-  return Response.json(offlineTranslate(text, direction, "未配置模型密钥，已使用离线证件规则"));
+  return Response.json(offlineTranslate(text, direction, docType, "未配置模型密钥，已使用离线完整翻译规则"));
 }
 
 function normalizeProvider(value: unknown): Provider {
@@ -63,7 +69,6 @@ function selectProvider(provider: Provider) {
     if (process.env.DEEPSEEK_API_KEY) return "deepseek";
     return "offline";
   }
-
   return provider;
 }
 
@@ -87,8 +92,7 @@ async function callOpenAI(text: string, direction: Direction, docType: string) {
 
   if (!response.ok) return null;
   const data = await response.json();
-  const content = data?.choices?.[0]?.message?.content;
-  return parseModelJson(content, "OpenAI GPT");
+  return parseModelJson(data?.choices?.[0]?.message?.content, "OpenAI GPT");
 }
 
 async function callDeepSeek(text: string, direction: Direction, docType: string) {
@@ -111,8 +115,7 @@ async function callDeepSeek(text: string, direction: Direction, docType: string)
 
   if (!response.ok) return null;
   const data = await response.json();
-  const content = data?.choices?.[0]?.message?.content;
-  return parseModelJson(content, "DeepSeek");
+  return parseModelJson(data?.choices?.[0]?.message?.content, "DeepSeek");
 }
 
 function buildPrompt(text: string, direction: Direction, docType: string, engine: string) {
@@ -122,8 +125,8 @@ function buildPrompt(text: string, direction: Direction, docType: string, engine
 Document type: ${docType}
 Target language: ${target}
 Preferred template expressions:
-${templateExpressions(docType)}
-Source OCR text:
+- ${templateExpressions(docType).join("\n- ")}
+Source text extracted from OCR/PDF/Word:
 ${text}`;
 }
 
@@ -133,84 +136,121 @@ function parseModelJson(content: unknown, fallbackMode: string) {
   return {
     mode: typeof parsed.mode === "string" ? parsed.mode : fallbackMode,
     title: typeof parsed.title === "string" ? parsed.title : "模型专业译文",
-    summary: typeof parsed.summary === "string" ? parsed.summary : "已按证件翻译规则生成译文。",
+    summary: typeof parsed.summary === "string" ? parsed.summary : "已按完整翻译规则生成译文。",
     fields: Array.isArray(parsed.fields) ? parsed.fields : [],
     polished: typeof parsed.polished === "string" ? parsed.polished : "",
     notes: Array.isArray(parsed.notes) ? parsed.notes : ["请复核 OCR 识别的姓名、号码、日期和地址。"],
   };
 }
 
-function offlineTranslate(text: string, direction: Direction, reason: string) {
-  const fields = extractFields(text, direction);
-  const title = direction === "en-to-zh" ? "离线英译中证件译文" : "Offline Chinese-to-English Document Translation";
+function offlineTranslate(text: string, direction: Direction, docType: string, reason: string) {
+  const parsed = parseFields(text, docType);
+  const fields = parsed.map((field) => ({
+    label: translateLabel(field.label, direction),
+    source: field.value,
+    translation: translateField(field, direction, docType),
+  }));
 
   return {
     mode: "offline rules",
-    title,
-    summary: `${reason}。离线模式会优先保留号码与日期，完整处理地址，并标出需要人工确认的内容。`,
+    title: direction === "zh-to-en" ? "Offline Chinese-to-English Complete Translation" : "离线英译中完整译文",
+    summary: `${reason}。离线模式会按字段和模板表达翻译；如果 OCR 原文有错，请先在左侧修正。`,
     fields,
-    polished: buildPolished(fields, text, direction),
+    polished: buildPolished(fields, direction, docType),
     notes:
-      direction === "en-to-zh"
-        ? ["英文人名默认保留原文，不擅自音译。", "地址会尽量完整中文化；不确定片段请人工校对。", "模板表达只用于术语和句式，不复制 Word 排版。"]
-        : ["中文姓名默认按名在前、姓在后输出。", "地址按中国地址层级完整译成英文。", "毕业证、学位证、身份证、出生证会优先套用标准模板表达。"],
+      direction === "zh-to-en"
+        ? ["英文地址按小到大输出，例如：No. 1, Kefa Road, Science and Technology Park, Nanshan District, Shenzhen City, Guangdong Province, China。", "姓名默认名在前、姓在后；若客户提供官方拼写，应以官方拼写为准。", "PDF/Word 已支持可复制文字提取；扫描 PDF 仍需要 OCR 或模型视觉。"]
+        : ["中文地址按大到小输出。", "英文人名没有确认中文名时默认保留英文。", "模糊或无法确认内容标注为“待确认”。"],
   };
 }
 
-function extractFields(text: string, direction: Direction): FieldResult[] {
-  const lines = text
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter(Boolean);
-  const fields: FieldResult[] = [];
+function parseFields(text: string, docType: string): ParsedField[] {
+  const normalized = text.replace(/\r/g, "\n").replace(/[ \t]+/g, " ").trim();
+  const fields: ParsedField[] = [];
 
-  for (const line of lines) {
-    const [rawLabel, ...rest] = line.split(/[:：]/);
-    const source = rest.length ? rest.join(":").trim() : line;
-    const label = rest.length ? normalizeLabel(rawLabel, direction) : inferLabel(line, direction);
-    fields.push({ label, source, translation: translateLine(source, direction, label) });
+  if (docType === "id-card" || /居民身份证|公民身份号码|Citizen Identity Card/i.test(normalized)) {
+    pushIf(fields, "Document Title", normalized.match(/中华人民共和国居民身份证|居民身份证/)?.[0] ?? "中华人民共和国居民身份证");
+    pushIf(fields, "Name", findValue(normalized, ["姓名", "Name"]));
+    pushIf(fields, "Sex", findValue(normalized, ["性别", "Sex"]));
+    pushIf(fields, "Ethnicity", findValue(normalized, ["民族", "Ethnicity"]));
+    pushIf(fields, "Date of Birth", findValue(normalized, ["出生", "出生日期", "Date of Birth"]));
+    pushIf(fields, "Address", findValue(normalized, ["住址", "地址", "Address"]));
+    pushIf(fields, "Citizen ID Number", findValue(normalized, ["公民身份号码", "身份号码", "Citizen ID Number", "ID Number"]));
+    return fillFallbackFields(fields, normalized);
   }
 
-  return fields.slice(0, 18);
+  const lines = normalized
+    .split(/\n+/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  for (const line of lines) {
+    const match = line.match(/^([^:：|]{1,40})[:：]\s*(.+)$/);
+    if (match) {
+      fields.push({ label: normalizeLabel(match[1]), value: match[2].trim() });
+    } else {
+      fields.push({ label: inferLabel(line), value: line });
+    }
+  }
+
+  return fields.slice(0, 80);
 }
 
-function normalizeLabel(label: string, direction: Direction) {
+function findValue(text: string, labels: string[]) {
+  const escaped = labels.map((label) => escapeRegExp(label)).join("|");
+  const stopLabels = [
+    "姓名",
+    "性别",
+    "民族",
+    "出生",
+    "出生日期",
+    "住址",
+    "地址",
+    "公民身份号码",
+    "签发机关",
+    "有效期限",
+    "Name",
+    "Sex",
+    "Ethnicity",
+    "Date of Birth",
+    "Address",
+    "Citizen ID Number",
+    "ID Number",
+  ];
+  const stops = stopLabels.filter((label) => !labels.includes(label)).map((label) => escapeRegExp(label)).join("|");
+  const pattern = new RegExp(`(?:${escaped})\\s*[:：]?\\s*([\\s\\S]*?)(?=\\n\\s*(?:${stops})\\s*[:：]?|$)`, "i");
+  const match = text.match(pattern);
+  return cleanupValue(match?.[1] ?? "");
+}
+
+function fillFallbackFields(fields: ParsedField[], text: string) {
+  const existing = new Set(fields.map((field) => field.label));
+  const idNumber = text.match(/\b\d{17}[\dXx]\b|\b\d{15}\b/)?.[0];
+  if (idNumber && !existing.has("Citizen ID Number")) fields.push({ label: "Citizen ID Number", value: idNumber });
+  return fields.filter((field) => field.value && field.value !== "待确认");
+}
+
+function pushIf(fields: ParsedField[], label: string, value: string) {
+  const cleaned = cleanupValue(value);
+  if (cleaned) fields.push({ label, value: cleaned });
+}
+
+function cleanupValue(value: string) {
+  return value.replace(/^[:：\s]+/, "").replace(/\s+/g, " ").trim();
+}
+
+function normalizeLabel(label: string) {
   const key = label.trim().toLowerCase();
-  const enToZh: Record<string, string> = {
-    name: "姓名",
-    address: "地址",
-    "date of birth": "出生日期",
-    dob: "出生日期",
-    class: "准驾类别",
-    expires: "有效期至",
-    exp: "有效期至",
-    issued: "签发日期",
-    iss: "签发日期",
-    "license no.": "驾驶证号码",
-    dln: "驾驶证号码",
-    "certificate no.": "证书编号",
-    "university name": "学校名称",
-    "training unit": "培养单位",
-    "neonatal name": "新生儿姓名",
-    "time of birth": "出生时间",
-    "birth weight": "出生体重",
-    "birth length": "出生身长",
-    "birth place": "出生地点",
-    "mother's name": "母亲姓名",
-    "father's name": "父亲姓名",
-    nationality: "国籍",
-    "ethnic group": "民族",
-    "valid identification": "有效身份证件",
-    "valid identification no.": "有效身份证件号码",
-  };
-  const zhToEn: Record<string, string> = {
+  const labels: Record<string, string> = {
     姓名: "Name",
     性别: "Sex",
     民族: "Ethnicity",
     出生: "Date of Birth",
+    出生日期: "Date of Birth",
     住址: "Address",
+    地址: "Address",
     公民身份号码: "Citizen ID Number",
-    身份证号码: "ID Number",
+    身份证号码: "Citizen ID Number",
     证书编号: "Certificate No.",
     学校名称: "University Name",
     培养单位: "Training Unit",
@@ -221,86 +261,193 @@ function normalizeLabel(label: string, direction: Direction) {
     出生地点: "Birth Place",
     母亲姓名: "Mother's Name",
     父亲姓名: "Father's Name",
-    国籍: "Nationality",
-    有效身份证件: "Valid Identification",
-    有效身份证件号码: "Valid Identification No.",
   };
 
-  return direction === "en-to-zh" ? enToZh[key] ?? label.trim() : zhToEn[label.trim()] ?? label.trim();
+  return labels[key] ?? label.trim();
 }
 
-function inferLabel(line: string, direction: Direction) {
-  if (/\d{5}(?:-\d{4})?/.test(line) || /road|street|avenue|drive|apt|suite|省|市|区|路|号/i.test(line)) {
-    return direction === "en-to-zh" ? "地址/文字" : "Address/Text";
+function inferLabel(line: string) {
+  if (/\d{17}[\dXx]|\d{15}/.test(line)) return "Citizen ID Number";
+  if (/省|市|区|县|路|街|号|室|road|street|avenue|apt|suite/i.test(line)) return "Address";
+  if (/\d{4}[年/-]\d{1,2}[月/-]\d{1,2}/.test(line)) return "Date";
+  return "Text";
+}
+
+function translateLabel(label: string, direction: Direction) {
+  if (direction === "zh-to-en") return label;
+  const labels: Record<string, string> = {
+    "Document Title": "文件名称",
+    Name: "姓名",
+    Sex: "性别",
+    Ethnicity: "民族",
+    "Date of Birth": "出生日期",
+    Address: "地址",
+    "Citizen ID Number": "公民身份号码",
+    "Certificate No.": "证书编号",
+    "University Name": "学校名称",
+    "Training Unit": "培养单位",
+    "Neonatal Name": "新生儿姓名",
+    "Time of Birth": "出生时间",
+    "Birth Weight": "出生体重",
+    "Birth Length": "出生身长",
+    "Birth Place": "出生地点",
+    "Mother's Name": "母亲姓名",
+    "Father's Name": "父亲姓名",
+  };
+  return labels[label] ?? label;
+}
+
+function translateField(field: ParsedField, direction: Direction, docType: string) {
+  if (direction === "zh-to-en") return translateToEnglish(field, docType);
+  return translateToChinese(field, docType);
+}
+
+function translateToEnglish(field: ParsedField, docType: string) {
+  const value = field.value;
+  switch (field.label) {
+    case "Document Title":
+      if (/身份证/.test(value)) return "Citizen Identity Card of the People's Republic of China";
+      return translateCommonToEnglish(value);
+    case "Name":
+      return chineseNameToEnglish(value);
+    case "Sex":
+      return value.includes("女") ? "Female" : value.includes("男") ? "Male" : translateCommonToEnglish(value);
+    case "Ethnicity":
+      return value.includes("汉") ? "Han" : chineseTextToPinyin(value);
+    case "Date of Birth":
+    case "Date":
+      return dateToEnglish(value);
+    case "Address":
+      return chineseAddressToEnglish(value);
+    case "Citizen ID Number":
+      return value.replace(/\D(?!(X|x)$)/g, "");
+    default:
+      return translateTemplateTextToEnglish(value, docType);
   }
-  return direction === "en-to-zh" ? "文字" : "Text";
 }
 
-function translateLine(source: string, direction: Direction, label: string) {
-  if (!source.trim()) return direction === "en-to-zh" ? "待确认" : "illegible";
-  if (/号码|number|dln|license|id/i.test(label)) return source;
-  if (/日期|birth|expires|issued|date/i.test(label)) return translateDate(source, direction);
-  if (/地址|address/i.test(label)) return translateAddress(source, direction);
-  if (direction === "en-to-zh") return translateCommonToChinese(source);
-  return translateCommonToEnglish(source);
-}
-
-function translateAddress(source: string, direction: Direction) {
-  if (direction === "zh-to-en") {
-    return source
-      .replace(/中华人民共和国/g, "People's Republic of China")
-      .replace(/广东省/g, "Guangdong Province")
-      .replace(/广州市/g, "Guangzhou City")
-      .replace(/天河区/g, "Tianhe District")
-      .replace(/珠江新城/g, "Zhujiang New Town")
-      .replace(/华夏路/g, "Huaxia Road")
-      .replace(/富力盈凯广场/g, "R&F Yingkai Plaza")
-      .replace(/号/g, " No. ")
-      .replace(/座/g, " Tower ")
-      .replace(/室/g, " Room ");
+function translateToChinese(field: ParsedField, docType: string) {
+  const value = field.value;
+  switch (field.label) {
+    case "Document Title":
+      return translateCommonToChinese(value);
+    case "Date of Birth":
+    case "Date":
+      return dateToChinese(value);
+    case "Address":
+      return englishAddressToChinese(value);
+    default:
+      return translateTemplateTextToChinese(value, docType);
   }
+}
 
-  return source
+function chineseNameToEnglish(value: string) {
+  const clean = value.replace(/[^\u4e00-\u9fa5·]/g, "");
+  if (!clean) return value;
+  const surname = clean.slice(0, 1);
+  const given = clean.slice(1);
+  const givenPinyin = titleCaseWords(pinyin(given, { toneType: "none", type: "array" }).join(" "));
+  const surnamePinyin = titleCaseWords(pinyin(surname, { toneType: "none" }));
+  return [givenPinyin, surnamePinyin].filter(Boolean).join(" ");
+}
+
+function chineseTextToPinyin(value: string) {
+  return titleCaseWords(pinyin(value.replace(/[^\u4e00-\u9fa5]/g, ""), { toneType: "none" })) || value;
+}
+
+function titleCaseWords(value: string) {
+  return value
+    .split(/\s+/)
+    .filter(Boolean)
+    .map((word) => word.slice(0, 1).toUpperCase() + word.slice(1).toLowerCase())
+    .join(" ");
+}
+
+function chineseAddressToEnglish(value: string) {
+  const clean = value.replace(/\s+/g, "");
+  const country = /中国|中华人民共和国/.test(clean) ? "China" : "China";
+  const province = clean.match(/([^省]+省)/)?.[1] ?? "";
+  const city = clean.match(/([^省市]+市)/)?.[1] ?? "";
+  const district = clean.match(/([^市区县]+[区县])/)?.[1] ?? "";
+  const streetPart = clean
+    .replace(/^.*?省/, "")
+    .replace(/^.*?市/, "")
+    .replace(/^.*?[区县]/, "");
+  const street = translateChineseStreet(streetPart);
+  const parts = [street, translateRegion(district), translateRegion(city), translateRegion(province), country].filter(Boolean);
+  return parts.join(", ");
+}
+
+function translateChineseStreet(value: string) {
+  if (!value) return "";
+  return value
+    .replace(/(\d+)号/g, "No. $1, ")
+    .replace(/(\d+)室/g, "Room $1, ")
+    .replace(/([A-ZＡ-Ｚ])座/gi, "Tower $1, ")
+    .replace(/科技园/g, "Science and Technology Park, ")
+    .replace(/科发路/g, "Kefa Road")
+    .replace(/华夏路/g, "Huaxia Road")
+    .replace(/珠江新城/g, "Zhujiang New Town, ")
+    .replace(/富力盈凯广场/g, "R&F Yingkai Plaza, ")
+    .replace(/路/g, " Road")
+    .replace(/街/g, " Street")
+    .replace(/,/g, ", ")
+    .replace(/\s+/g, " ")
+    .replace(/,\s*,/g, ",")
+    .replace(/,\s*$/g, "")
+    .trim();
+}
+
+function translateRegion(value: string) {
+  if (!value) return "";
+  return value
+    .replace(/广东省/g, "Guangdong Province")
+    .replace(/深圳市/g, "Shenzhen City")
+    .replace(/广州市/g, "Guangzhou City")
+    .replace(/南山区/g, "Nanshan District")
+    .replace(/天河区/g, "Tianhe District")
+    .replace(/省/g, " Province")
+    .replace(/市/g, " City")
+    .replace(/区/g, " District")
+    .replace(/县/g, " County");
+}
+
+function englishAddressToChinese(value: string) {
+  const normalized = value
     .replace(/\bUSA\b|United States(?: of America)?/gi, "美国")
     .replace(/\bCA\b/g, "加利福尼亚州")
     .replace(/San Francisco/gi, "旧金山")
     .replace(/Market Street/gi, "市场街")
-    .replace(/\bApt\.?\s*/gi, "公寓 ")
-    .replace(/\bSuite\s*/gi, "套房 ");
+    .replace(/\bApt\.?\s*/gi, "公寓")
+    .replace(/\bSuite\s*/gi, "套房")
+    .replace(/No\.\s*/gi, "")
+    .replace(/,\s*/g, "");
+  return normalized;
 }
 
-function translateDate(source: string, direction: Direction) {
-  const numeric = source.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{2,4})$/);
-  if (!numeric) return source;
-  const [, month, day, year] = numeric;
-  const fullYear = year.length === 2 ? `20${year}` : year;
-  if (direction === "en-to-zh") return `${fullYear}年${Number(month)}月${Number(day)}日`;
-  return `${monthName(Number(month))} ${Number(day)}, ${fullYear}`;
+function dateToEnglish(value: string) {
+  const clean = value.replace(/\s+/g, "");
+  const chinese = clean.match(/(\d{4})年(\d{1,2})月(\d{1,2})日?/);
+  if (chinese) return `${monthName(Number(chinese[2]))} ${Number(chinese[3])}, ${chinese[1]}`;
+  const numeric = clean.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{2,4})$/);
+  if (numeric) return `${monthName(Number(numeric[1]))} ${Number(numeric[2])}, ${normalizeYear(numeric[3])}`;
+  return value;
 }
 
-function translateCommonToChinese(source: string) {
-  return source
-    .replace(/DRIVER'?S? LICEN[CS]E/gi, "驾驶执照")
-    .replace(/General Higher Educational Institutes/gi, "普通高等学校")
-    .replace(/Graduation Certificate/gi, "毕业证书")
-    .replace(/BACHELOR’S DEGREE CERTIFICATE|BACHELOR'S DEGREE CERTIFICATE/gi, "学士学位证书")
-    .replace(/Master’s Degree Candidate|Master's Degree Candidate/gi, "硕士研究生")
-    .replace(/Citizen Identity Card of the People's Republic of China/gi, "中华人民共和国居民身份证")
-    .replace(/MEDICAL CERTIFICATE OF BIRTH|BIRTH CERTIFICATE/gi, "出生医学证明")
-    .replace(/Translator Statement/gi, "翻译声明")
-    .replace(/Certificate No\./gi, "证书编号")
-    .replace(/University Name/gi, "学校名称")
-    .replace(/Training Unit/gi, "培养单位")
-    .replace(/Class/gi, "准驾类别")
-    .replace(/None/gi, "无")
-    .replace(/Corrective Lenses/gi, "矫正镜片")
-    .replace(/Federal Limits Apply/gi, "联邦限制适用");
+function dateToChinese(value: string) {
+  const numeric = value.trim().match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{2,4})$/);
+  if (numeric) return `${normalizeYear(numeric[3])}年${Number(numeric[1])}月${Number(numeric[2])}日`;
+  const month = value.match(/(January|February|March|April|May|June|July|August|September|October|November|December)\s+(\d{1,2}),?\s+(\d{4})/i);
+  if (month) return `${month[3]}年${monthNumber(month[1])}月${Number(month[2])}日`;
+  return value;
 }
 
-function translateCommonToEnglish(source: string) {
-  return source
-    .replace(/中华人民共和国居民身份证/g, "Resident Identity Card of the People's Republic of China")
-    .replace(/居民身份证/g, "Citizen Identity Card")
+function normalizeYear(year: string) {
+  return year.length === 2 ? `20${year}` : year;
+}
+
+function translateTemplateTextToEnglish(value: string, docType: string) {
+  return translateCommonToEnglish(value)
     .replace(/普通高等学校/g, "General Higher Educational Institutes")
     .replace(/毕业证书/g, "Graduation Certificate")
     .replace(/学士学位证书/g, "Bachelor's Degree Certificate")
@@ -322,11 +469,49 @@ function translateCommonToEnglish(source: string) {
     .replace(/汉/g, "Han");
 }
 
+function translateTemplateTextToChinese(value: string, docType: string) {
+  return translateCommonToChinese(value)
+    .replace(/General Higher Educational Institutes/gi, "普通高等学校")
+    .replace(/Graduation Certificate/gi, "毕业证书")
+    .replace(/Bachelor'?s Degree Certificate/gi, "学士学位证书")
+    .replace(/Citizen Identity Card of the People's Republic of China/gi, "中华人民共和国居民身份证")
+    .replace(/Medical Certificate of Birth|Birth Certificate/gi, "出生医学证明")
+    .replace(/Certificate No\./gi, "证书编号")
+    .replace(/University Name/gi, "学校名称")
+    .replace(/Training Unit/gi, "培养单位");
+}
+
+function translateCommonToEnglish(value: string) {
+  return value
+    .replace(/中华人民共和国居民身份证|居民身份证/g, "Citizen Identity Card of the People's Republic of China")
+    .replace(/待确认/g, "illegible");
+}
+
+function translateCommonToChinese(value: string) {
+  return value
+    .replace(/Driver'?s? Licen[cs]e/gi, "驾驶执照")
+    .replace(/Name/gi, "姓名")
+    .replace(/Address/gi, "地址")
+    .replace(/Date of Birth|DOB/gi, "出生日期")
+    .replace(/Class/gi, "准驾类别")
+    .replace(/Expires|EXP/gi, "有效期至")
+    .replace(/illegible/gi, "待确认");
+}
+
+function buildPolished(fields: FieldResult[], direction: Direction, docType: string) {
+  if (!fields.length) return direction === "zh-to-en" ? "Illegible: no translatable content was extracted." : "待确认：未能提取可翻译内容。";
+
+  const lines = fields.map((field) => `${field.label}: ${field.translation}`);
+  if (docType === "id-card" && direction === "zh-to-en") {
+    return ["Citizen Identity Card of the People's Republic of China", ...lines.filter((line) => !line.startsWith("Document Title:"))].join("\n");
+  }
+  return lines.join("\n");
+}
+
 function templateExpressions(docType: string) {
   const common = [
     "Translator Statement: I hereby certify that this is a true and correct translation of the original document to the best of my knowledge.",
     "Certificate No.",
-    "Use (sealed), (stamped), or (signature) only when visible or implied by the source/template.",
   ];
   const byType: Record<string, string[]> = {
     "graduation-certificate": [
@@ -359,17 +544,19 @@ function templateExpressions(docType: string) {
     ],
   };
 
-  return [...(byType[docType] ?? []), ...common].join("\n- ");
-}
-
-function buildPolished(fields: FieldResult[], text: string, direction: Direction) {
-  if (!fields.length) return direction === "en-to-zh" ? "待确认：未能提取可翻译字段。" : "Illegible: no translatable fields were extracted.";
-
-  return fields.map((field) => `${field.label}: ${field.translation}`).join("\n") || text;
+  return [...(byType[docType] ?? []), ...common];
 }
 
 function monthName(month: number) {
   return ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"][
     Math.max(0, Math.min(11, month - 1))
   ];
+}
+
+function monthNumber(month: string) {
+  return ["january", "february", "march", "april", "may", "june", "july", "august", "september", "october", "november", "december"].indexOf(month.toLowerCase()) + 1;
+}
+
+function escapeRegExp(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
