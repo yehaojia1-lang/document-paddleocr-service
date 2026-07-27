@@ -4,7 +4,6 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>证件 OCR 测试版</title>
-  <script src="/ocr/tesseract.min.js"></script>
   <style>
     :root {
       --bg: #f6f7f3;
@@ -112,7 +111,7 @@
 <main>
   <header>
     <h1>证件 OCR 测试版</h1>
-    <p>请尽量上传“原始证件图片”，不要上传网页截图里的小证件。这个版本会加载中文+英文 OCR 包，自动裁剪疑似证件区域，放大增强后识别。</p>
+    <p>请尽量上传“原始证件图片”，不要上传网页截图里的小证件。这个版本默认走云端 OCR：手机只负责上传图片，不再加载大型 wasm 和中文语言包。</p>
   </header>
   <div class="grid">
     <section>
@@ -131,7 +130,7 @@
         <button id="run" type="button">开始 OCR</button>
         <button id="copy" class="secondary" type="button">复制识别文本</button>
       </div>
-      <p class="hint">提示：如果证件只占照片很小一块，识别会变差。请尽量裁到证件占画面 70% 以上。</p>
+    <p class="hint">提示：如果证件只占照片很小一块，识别会变差。请尽量裁到证件占画面 70% 以上。下方预处理图会显示实际送去 OCR 的图片。</p>
       <canvas id="debug"></canvas>
     </section>
     <section>
@@ -156,7 +155,6 @@
   const mode = document.getElementById("mode");
   let currentFile = null;
   let currentBitmap = null;
-  let workerPromise = null;
 
   function setStatus(text, progress) {
     statusEl.textContent = text;
@@ -198,42 +196,27 @@
   copy.addEventListener("click", async () => navigator.clipboard.writeText(textArea.value));
   run.addEventListener("click", recognize);
 
-  async function getWorker() {
-    if (!workerPromise) {
-      setStatus("正在从本站加载 OCR 核心和中英文语言包，首次约 20-60 秒", .02);
-      workerPromise = withTimeout(Tesseract.createWorker("chi_sim+eng", 1, {
-        workerPath: "/ocr/worker.min.js",
-        corePath: "/ocr/core",
-        langPath: "/ocr/tessdata",
-        cacheMethod: "write",
-        logger: message => {
-          if (message.status) setStatus(readableStatus(message.status), message.progress || 0.02);
-        }
-      }), 90000, "OCR 加载超时：请刷新重试，或换 Wi‑Fi/电脑端先测。");
-    }
-    return workerPromise;
-  }
-
   async function recognize() {
     if (!currentBitmap) {
       setStatus("请先上传图片", 0);
       return;
     }
     textArea.value = "";
-    const worker = await getWorker();
-    if (mode.value === "id") {
-      textArea.value = await recognizeIdCard(worker, currentBitmap);
-    } else {
-      const canvas = preprocess(currentBitmap, detectDocumentRegion(currentBitmap));
-      drawDebug(canvas);
-      await worker.setParameters({ tessedit_pageseg_mode: "6", preserve_interword_spaces: "1" });
-      const result = await worker.recognize(canvas);
-      textArea.value = cleanup(result.data.text);
+    try {
+      if (mode.value === "id") {
+        textArea.value = await recognizeIdCard(currentBitmap);
+      } else {
+        const canvas = preprocess(currentBitmap, detectDocumentRegion(currentBitmap));
+        drawDebug(canvas);
+        textArea.value = await cloudOcr(canvas, "6");
+      }
+      setStatus("识别完成", 1);
+    } catch (error) {
+      setStatus(error.message || "云端 OCR 失败", 0);
     }
-    setStatus("识别完成", 1);
   }
 
-  async function recognizeIdCard(worker, bitmap) {
+  async function recognizeIdCard(bitmap) {
     const cardCanvas = preprocess(bitmap, detectDocumentRegion(bitmap));
     drawDebug(cardCanvas);
     const cardBitmap = await createImageBitmap(cardCanvas);
@@ -249,12 +232,34 @@
       const r = regions[i];
       setStatus("正在识别 " + r.label, .12 + i * .16);
       const crop = preprocess(cardBitmap, r, 6);
-      await worker.setParameters({ tessedit_pageseg_mode: r.psm, preserve_interword_spaces: "1" });
-      const result = await worker.recognize(crop);
-      const value = normalizeField(r.label, cleanup(result.data.text));
+      const value = normalizeField(r.label, await cloudOcr(crop, r.psm));
       if (value) lines.push(r.label === "性别/民族" ? value : `${r.label}：${value}`);
     }
     return lines.join("\n");
+  }
+
+  async function cloudOcr(canvas, psm) {
+    setStatus("正在上传预处理图片到云端 OCR", .1);
+    const image = canvasToDataUrl(canvas);
+    const response = await fetch("/.netlify/functions/ocr", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ image, psm })
+    });
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(result.error || "云端 OCR 失败");
+    return cleanup(result.text || "");
+  }
+
+  function canvasToDataUrl(canvas) {
+    const maxSide = 2200;
+    if (Math.max(canvas.width, canvas.height) <= maxSide) return canvas.toDataURL("image/jpeg", .88);
+    const scale = maxSide / Math.max(canvas.width, canvas.height);
+    const smaller = document.createElement("canvas");
+    smaller.width = Math.round(canvas.width * scale);
+    smaller.height = Math.round(canvas.height * scale);
+    smaller.getContext("2d").drawImage(canvas, 0, 0, smaller.width, smaller.height);
+    return smaller.toDataURL("image/jpeg", .88);
   }
 
   function preprocess(bitmap, region, forcedScale) {
@@ -331,26 +336,6 @@
     debug.width = canvas.width;
     debug.height = canvas.height;
     debug.getContext("2d").drawImage(canvas, 0, 0);
-  }
-  function readableStatus(status) {
-    return ({
-      "loading tesseract core": "正在加载 OCR 核心",
-      "initializing tesseract": "正在初始化 OCR",
-      "loading language traineddata": "正在加载中文/英文语言包",
-      "initializing api": "正在准备识别",
-      "recognizing text": "正在识别文字"
-    })[status] || status;
-  }
-  function withTimeout(promise, ms, message) {
-    let timer;
-    const timeout = new Promise((_, reject) => {
-      timer = setTimeout(() => reject(new Error(message)), ms);
-    });
-    return Promise.race([promise, timeout]).finally(() => clearTimeout(timer)).catch(error => {
-      workerPromise = null;
-      setStatus(error.message || "OCR 加载失败", 0);
-      throw error;
-    });
   }
 </script>
 </body>
