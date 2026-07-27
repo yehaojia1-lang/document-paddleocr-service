@@ -1,7 +1,9 @@
 const http = require("node:http");
+const mammoth = require("mammoth");
 
 const PORT = Number(process.env.PORT || 3000);
 const OCR_SERVICE_URL = (process.env.OCR_SERVICE_URL || "https://document-paddleocr-service.onrender.com").replace(/\/+$/, "");
+const TEMPLATE_TEXT_LIMIT = 14000;
 
 const server = http.createServer(async (req, res) => {
   try {
@@ -17,6 +19,7 @@ const server = http.createServer(async (req, res) => {
       });
     }
     if (req.method === "POST" && url.pathname === "/api/ocr") return proxyOcr(req, res);
+    if (req.method === "POST" && url.pathname === "/api/template") return extractTemplate(req, res);
     if (req.method === "POST" && url.pathname === "/api/translate") return translate(req, res);
     sendText(res, 404, "Not found");
   } catch (error) {
@@ -40,18 +43,38 @@ async function proxyOcr(req, res) {
   res.end(text);
 }
 
+async function extractTemplate(req, res) {
+  const body = await readBody(req);
+  const parts = parseMultipart(body, req.headers["content-type"] || "");
+  const file = parts.find((part) => part.filename);
+  if (!file) return sendJson(res, 400, { error: "No template file was uploaded." });
+
+  const name = file.filename.toLowerCase();
+  let text = "";
+  if (name.endsWith(".docx")) {
+    const result = await mammoth.extractRawText({ buffer: file.data });
+    text = result.value || "";
+  } else {
+    text = file.data.toString("utf8");
+  }
+
+  text = cleanTemplateText(text).slice(0, TEMPLATE_TEXT_LIMIT);
+  sendJson(res, 200, { filename: file.filename, text, chars: text.length });
+}
+
 async function translate(req, res) {
   const payload = JSON.parse((await readBody(req)).toString("utf8") || "{}");
   const text = typeof payload.text === "string" ? payload.text.trim() : "";
   const direction = payload.direction === "en-to-zh" ? "en-to-zh" : "zh-to-en";
   const provider = payload.provider === "openai" || payload.provider === "deepseek" || payload.provider === "offline" ? payload.provider : "auto";
   const docType = typeof payload.docType === "string" ? payload.docType : "other";
+  const templateText = typeof payload.templateText === "string" ? cleanTemplateText(payload.templateText).slice(0, TEMPLATE_TEXT_LIMIT) : "";
 
   if (!text) return sendJson(res, 400, { error: "No OCR text was provided." });
 
   const providers = provider === "auto" ? ["deepseek", "openai"] : [provider];
   for (const name of providers) {
-    const result = await callModel(name, text, direction, docType).catch((error) => ({
+    const result = await callModel(name, text, direction, docType, templateText).catch((error) => ({
       error: error instanceof Error ? error.message : "Model request failed",
     }));
     if (result && !result.error) return sendJson(res, 200, result);
@@ -64,7 +87,7 @@ async function translate(req, res) {
   sendJson(res, 200, offlineTranslate(text, direction));
 }
 
-async function callModel(provider, text, direction, docType) {
+async function callModel(provider, text, direction, docType, templateText) {
   if (provider === "offline") return null;
   const isDeepSeek = provider === "deepseek";
   const key = isDeepSeek ? process.env.DEEPSEEK_API_KEY : process.env.OPENAI_API_KEY;
@@ -78,28 +101,19 @@ async function callModel(provider, text, direction, docType) {
     },
     body: JSON.stringify({
       model: isDeepSeek ? process.env.DEEPSEEK_MODEL || "deepseek-chat" : process.env.OPENAI_MODEL || "gpt-4.1-mini",
-      temperature: 0.1,
+      temperature: 0.05,
       response_format: { type: "json_object" },
       messages: [
         {
           role: "system",
-          content: [
-            "You are a professional certified document translator and OCR cleanup assistant.",
-            "The OCR text may contain noise, wrong line breaks, missing labels, or mixed languages. Correct only obvious OCR errors from context. If a value is unreadable, write 'illegible' or '无法辨认'.",
-            "Translate every visible item completely. Do not omit labels, numbers, dates, addresses, document numbers, restrictions, issuing authorities, signatures, notes, categories, or back-side text.",
-            "Preserve document numbers, ID numbers, license numbers, dates and codes exactly unless a character is clearly OCR noise.",
-            "Address order is mandatory: English output uses small-to-large order, such as room/number/road/district/city/province/country. Chinese output uses large-to-small order.",
-            "For Chinese ID cards, extract and translate these fields when present: document title, name, sex, ethnicity, date of birth, full address, citizen ID number.",
-            "For driver licenses, extract and translate these fields when present: document title, surname/name, date/place of birth, issue date, expiry date, issuing authority, license number, categories, address, restrictions.",
-            "Do not merely repeat the OCR. The polished field must be a complete professional translation ready to copy.",
-            "Return only JSON with keys mode,title,summary,fields,polished,notes. fields is an array of {label,source,translation}.",
-          ].join("\n"),
+          content: buildSystemPrompt(templateText),
         },
         {
           role: "user",
           content: `Document type: ${docType}
 Target language: ${direction === "en-to-zh" ? "Simplified Chinese" : "professional English"}
-OCR text:
+
+OCR text to translate:
 ${text}`,
         },
       ],
@@ -110,6 +124,26 @@ ${text}`,
   const content = data?.choices?.[0]?.message?.content;
   if (typeof content !== "string") throw new Error("Model returned no content");
   return normalizeModelResult(JSON.parse(content), provider);
+}
+
+function buildSystemPrompt(templateText) {
+  const baseRules = [
+    "You are a professional certified document translator for identity documents, driver licenses, birth certificates, graduation certificates, degree certificates, and official records.",
+    "The OCR text may contain noise. Correct only obvious OCR errors from context. If a value is unreadable, write '无法辨认' for Chinese output or 'illegible' for English output.",
+    "Translate every visible item completely. Do not omit labels, numbers, dates, addresses, document numbers, restrictions, issuing authorities, signatures, notes, categories, or back-side text.",
+    "Never merely repeat the source language. Every field must be translated into the target language unless it is a name, code, ID number, document number, date, or other value that should be preserved.",
+    "Follow the user's reference template and translation rules above your own wording. Use its document titles, field labels, sentence order, and standard expressions whenever applicable.",
+    "Address rule is strict. For English-to-Chinese, translate the full address into Chinese in large-to-small order, including country/state/province, city/town, street name, street number, apartment/unit/room, and ZIP/postal code. Example: '101 MONMOUTH ST APT 520 BROOKLINE, MA 02446-5613' -> '美国马萨诸塞州布鲁克莱恩市蒙茅斯街101号520公寓，邮政编码02446-5613'.",
+    "For Chinese-to-English addresses, use small-to-large order and translate all administrative divisions and building/unit details. Do not drop road names, community names, building numbers, units, rooms, or postal codes.",
+    "Use standard document wording: Sex, Ethnicity, Date of Birth, Address, Citizen ID Number, Name; Driver License, License Number, Date of Issue, Date of Expiry, Class, Restrictions; Birth Certificate, Father, Mother, Place of Birth; Graduation Certificate, Degree Certificate, Major, School, President, Certificate No.",
+    "For Chinese personal names translated into English, use the template style if supplied. Otherwise use pinyin in normal name order with surname first only when the template indicates that style.",
+    "Return only JSON with keys mode,title,summary,fields,polished,notes. fields is an array of {label,source,translation}. polished must be a complete professional translation ready to copy.",
+  ];
+  if (!templateText) return baseRules.join("\n");
+  return `${baseRules.join("\n")}
+
+Reference template / translation rules supplied by the user. Treat this as the preferred terminology and style guide:
+${templateText}`;
 }
 
 function normalizeModelResult(value, provider) {
@@ -175,6 +209,40 @@ function simpleZhToEn(value) {
     .replace(/汉/g, "Han");
 }
 
+function parseMultipart(body, contentType) {
+  const match = /boundary=(?:"([^"]+)"|([^;]+))/i.exec(contentType);
+  if (!match) return [];
+  const boundary = Buffer.from(`--${match[1] || match[2]}`);
+  const parts = [];
+  let start = body.indexOf(boundary);
+  while (start !== -1) {
+    start += boundary.length;
+    if (body[start] === 45 && body[start + 1] === 45) break;
+    if (body[start] === 13 && body[start + 1] === 10) start += 2;
+    const headerEnd = body.indexOf(Buffer.from("\r\n\r\n"), start);
+    if (headerEnd === -1) break;
+    const headers = body.slice(start, headerEnd).toString("utf8");
+    let dataStart = headerEnd + 4;
+    let next = body.indexOf(boundary, dataStart);
+    if (next === -1) break;
+    let dataEnd = next;
+    if (body[dataEnd - 2] === 13 && body[dataEnd - 1] === 10) dataEnd -= 2;
+    const name = /name="([^"]+)"/i.exec(headers)?.[1] || "";
+    const filename = /filename="([^"]*)"/i.exec(headers)?.[1] || "";
+    parts.push({ name, filename, headers, data: body.slice(dataStart, dataEnd) });
+    start = next;
+  }
+  return parts;
+}
+
+function cleanTemplateText(text) {
+  return String(text || "")
+    .replace(/\r/g, "")
+    .replace(/[ \t]+\n/g, "\n")
+    .replace(/\n{4,}/g, "\n\n\n")
+    .trim();
+}
+
 function readBody(req) {
   return new Promise((resolve, reject) => {
     const chunks = [];
@@ -211,39 +279,38 @@ function sendHtml(res) {
     :root { color-scheme: light; --green:#0f7a4e; --ink:#17211d; --muted:#6a746f; --line:#d9e0dc; --bg:#f5f7f3; --paper:#fff; --gold:#d49b22; }
     * { box-sizing: border-box; }
     body { margin:0; font-family: Arial, "Microsoft YaHei", sans-serif; color:var(--ink); background:var(--bg); }
-    main { width:min(1120px, 100%); margin:0 auto; padding:28px 16px 40px; }
+    main { width:min(1180px, 100%); margin:0 auto; padding:28px 16px 40px; }
     h1 { margin:0 0 8px; font-size:30px; }
     h2 { margin:0 0 16px; font-size:21px; }
     p { margin:0; color:var(--muted); line-height:1.7; }
-    .top { display:flex; justify-content:space-between; gap:16px; align-items:flex-end; margin-bottom:18px; }
+    .top { margin-bottom:18px; }
     .grid { display:grid; grid-template-columns:1fr 1fr; gap:16px; }
     .panel { background:var(--paper); border:1px solid var(--line); border-radius:8px; padding:18px; box-shadow:0 8px 24px rgba(18,37,28,.06); }
     .controls { display:flex; flex-wrap:wrap; gap:10px; margin:16px 0; }
-    select, button, textarea { font:inherit; }
+    select, button, textarea, input { font:inherit; }
     select, textarea { border:1px solid var(--line); border-radius:6px; background:#fff; }
     select { padding:10px 12px; }
     button { border:0; border-radius:6px; padding:11px 16px; background:var(--green); color:#fff; font-weight:700; cursor:pointer; }
     button.secondary { background:#edf4ef; color:var(--green); border:1px solid var(--line); }
     button:disabled { opacity:.55; cursor:not-allowed; }
-    .drop { min-height:260px; border:2px dashed #a9b8b0; border-radius:8px; display:grid; place-items:center; text-align:center; padding:14px; background:#fbfcfa; overflow:hidden; }
+    .drop { min-height:240px; border:2px dashed #a9b8b0; border-radius:8px; display:grid; place-items:center; text-align:center; padding:14px; background:#fbfcfa; overflow:hidden; }
     .drop.drag { border-color:var(--green); background:#edf7f0; }
-    .drop img { max-width:100%; max-height:360px; display:block; border-radius:4px; }
-    textarea { width:100%; min-height:260px; padding:14px; resize:vertical; line-height:1.6; }
+    .drop img { max-width:100%; max-height:330px; display:block; border-radius:4px; }
+    textarea { width:100%; min-height:240px; padding:14px; resize:vertical; line-height:1.6; }
     .bar { height:9px; background:#dfe7e2; border-radius:999px; overflow:hidden; margin:10px 0 8px; }
     .bar span { display:block; height:100%; width:0; background:linear-gradient(90deg, var(--green), var(--gold)); transition:width .25s; }
-    .result { white-space:pre-wrap; min-height:260px; border:1px solid var(--line); border-radius:6px; padding:14px; background:#fbfcfa; line-height:1.6; }
+    .result { white-space:pre-wrap; min-height:280px; border:1px solid var(--line); border-radius:6px; padding:14px; background:#fbfcfa; line-height:1.6; }
     .tiny { font-size:13px; color:var(--muted); }
-    @media (max-width: 820px) { .grid { grid-template-columns:1fr; } .top { display:block; } h1 { font-size:25px; } }
+    @media (max-width: 820px) { .grid { grid-template-columns:1fr; } h1 { font-size:25px; } }
   </style>
 </head>
 <body>
 <main>
   <div class="top">
-    <div>
-      <h1>证件文件智能翻译</h1>
-      <p>上传图片、PDF 或 Word，先 OCR 识别，再完整翻译。地址规则：英译中按大到小，中译英按小到大。</p>
-    </div>
+    <h1>证件文件智能翻译</h1>
+    <p>左边上传要翻译的文件，右边上传参考模板或翻译规范。DeepSeek 会按模板表达、字段名称和地址规则生成译文。</p>
   </div>
+
   <section class="panel">
     <div class="controls">
       <select id="direction"><option value="zh-to-en">中文翻译成英文</option><option value="en-to-zh">英文/外文翻译成中文</option></select>
@@ -252,21 +319,33 @@ function sendHtml(res) {
     </div>
     <div class="grid">
       <div>
-        <h2>上传 / 拖拽 / 粘贴</h2>
+        <h2>上传待翻译文件</h2>
         <input id="file" type="file" accept="image/*,.pdf,.doc,.docx" />
         <div id="drop" class="drop" tabindex="0"><p>选择文件，或把文件拖进这里。电脑也可以点击这里后 Ctrl+V 粘贴截图。</p></div>
         <div class="controls"><button id="ocrBtn">开始 OCR</button><button class="secondary" id="copyOcr">复制识别文本</button></div>
         <p id="status" class="tiny">等待上传文件</p><div class="bar"><span id="progress"></span></div>
       </div>
       <div>
-        <h2>识别结果</h2>
-        <textarea id="source" placeholder="OCR 文字会出现在这里，可手动校对后再翻译。"></textarea>
+        <h2>上传参考模板 / 规则</h2>
+        <input id="templateFile" type="file" accept=".docx,.txt,.md" />
+        <textarea id="templateText" placeholder="模板文字会出现在这里；也可以直接粘贴翻译规范、术语表或示例译文。"></textarea>
+        <p id="templateStatus" class="tiny">可上传身份证、出生证、毕业证等 Word 模板，或粘贴你的翻译规则。</p>
       </div>
     </div>
   </section>
+
   <section class="panel" style="margin-top:16px">
-    <div class="controls"><button id="translateBtn">生成译文</button><button class="secondary" id="copyResult">复制译文</button></div>
-    <div id="result" class="result">译文会出现在这里。</div>
+    <div class="grid">
+      <div>
+        <h2>识别结果</h2>
+        <textarea id="source" placeholder="OCR 文字会出现在这里，可手动校对后再翻译。"></textarea>
+      </div>
+      <div>
+        <h2>译文</h2>
+        <div class="controls"><button id="translateBtn">生成译文</button><button class="secondary" id="copyResult">复制译文</button></div>
+        <div id="result" class="result">译文会出现在这里。</div>
+      </div>
+    </div>
   </section>
 </main>
 <script>
@@ -290,6 +369,21 @@ $("drop").addEventListener("dragleave", () => $("drop").classList.remove("drag")
 $("drop").addEventListener("drop", e => { e.preventDefault(); $("drop").classList.remove("drag"); showFile(e.dataTransfer.files[0]); });
 $("drop").addEventListener("paste", e => { const file = [...e.clipboardData.files][0]; if (file) showFile(file); });
 document.addEventListener("paste", e => { const file = [...e.clipboardData.files][0]; if (file) showFile(file); });
+$("templateFile").addEventListener("change", async e => {
+  const file = e.target.files[0];
+  if (!file) return;
+  $("templateStatus").textContent = "正在读取模板：" + file.name;
+  const form = new FormData();
+  form.set("file", file, file.name);
+  const res = await fetch("/api/template", { method:"POST", body: form });
+  const data = await res.json();
+  if (data.error) {
+    $("templateStatus").textContent = data.error;
+    return;
+  }
+  $("templateText").value = data.text || "";
+  $("templateStatus").textContent = "已读取模板：" + file.name + "（" + (data.chars || 0) + " 字）";
+});
 $("ocrBtn").addEventListener("click", async () => {
   if (!selectedFile) return alert("请先选择文件");
   setProgress(.15, "正在上传到 OCR 服务");
@@ -305,8 +399,18 @@ $("ocrBtn").addEventListener("click", async () => {
 $("translateBtn").addEventListener("click", async () => {
   const text = $("source").value.trim();
   if (!text) return alert("请先 OCR 或粘贴原文");
-  $("result").textContent = "正在生成译文...";
-  const res = await fetch("/api/translate", { method:"POST", headers:{"content-type":"application/json"}, body: JSON.stringify({ text, direction:$("direction").value, docType:$("docType").value, provider:$("provider").value }) });
+  $("result").textContent = "正在按模板生成译文...";
+  const res = await fetch("/api/translate", {
+    method:"POST",
+    headers:{"content-type":"application/json"},
+    body: JSON.stringify({
+      text,
+      templateText:$("templateText").value,
+      direction:$("direction").value,
+      docType:$("docType").value,
+      provider:$("provider").value
+    })
+  });
   const data = await res.json();
   if (data.error) {
     $("result").textContent = data.error;

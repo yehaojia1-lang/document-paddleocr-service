@@ -1,0 +1,9 @@
+{
+  "name": "document-translation-web",
+  "version": "1.0.0",
+  "private": true,
+  "type": "commonjs",
+  "dependencies": {
+    "mammoth": "1.12.0"
+  }
+}
