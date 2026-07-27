@@ -119,8 +119,8 @@
       <label>
         识别模式
         <select id="mode">
+          <option value="full">整图完整识别（推荐）</option>
           <option value="id">中国身份证字段识别</option>
-          <option value="full">整图完整识别</option>
         </select>
       </label>
       <input id="file" type="file" accept="image/*" />
@@ -217,8 +217,13 @@
   }
 
   async function recognizeIdCard(bitmap) {
-    const cardCanvas = preprocess(bitmap, detectDocumentRegion(bitmap));
+    const region = detectDocumentRegion(bitmap);
+    const cardCanvas = preprocess(bitmap, region);
     drawDebug(cardCanvas);
+    if (!region.detected) {
+      setStatus("未检测到身份证区域，已改用整图 OCR", .18);
+      return await cloudOcr(cardCanvas, "6");
+    }
     const regions = [
       { label: "姓名", x: .12, y: .14, w: .34, h: .10, psm: "7" },
       { label: "性别/民族", x: .12, y: .27, w: .42, h: .10, psm: "7" },
@@ -295,19 +300,23 @@
       for (let x = 0; x < canvas.width; x++) {
         const i = (y * canvas.width + x) * 4;
         const r = data[i], g = data[i + 1], b = data[i + 2];
-        if ((b > 115 && g > 90 && b > r + 14) || (r > 180 && g > 180 && b > 170)) {
+        const blueTexture = b > 110 && g > 85 && b > r + 16 && Math.abs(b - g) < 95;
+        const cyanText = g > 120 && b > 125 && r < 130;
+        if (blueTexture || cyanText) {
           minX = Math.min(minX, x); minY = Math.min(minY, y);
           maxX = Math.max(maxX, x); maxY = Math.max(maxY, y);
           count++;
         }
       }
     }
-    if (count < 120 || maxX <= minX || maxY <= minY) return { x: 0, y: 0, w: 1, h: 1 };
+    if (count < 120 || maxX <= minX || maxY <= minY) return { x: 0, y: 0, w: 1, h: 1, detected: false };
     const padX = Math.round((maxX - minX) * .18);
     const padY = Math.round((maxY - minY) * .22);
     const left = Math.max(0, minX - padX), top = Math.max(0, minY - padY);
     const right = Math.min(canvas.width, maxX + padX), bottom = Math.min(canvas.height, maxY + padY);
-    return { x: left / canvas.width, y: top / canvas.height, w: (right - left) / canvas.width, h: (bottom - top) / canvas.height };
+    const region = { x: left / canvas.width, y: top / canvas.height, w: (right - left) / canvas.width, h: (bottom - top) / canvas.height, detected: true };
+    if (region.w < .18 || region.h < .12) return { x: 0, y: 0, w: 1, h: 1, detected: false };
+    return region;
   }
 
   function normalizeField(label, text) {
