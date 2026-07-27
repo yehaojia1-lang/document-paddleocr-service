@@ -10,13 +10,15 @@ from typing import Iterable
 import pypdfium2 as pdfium
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from PIL import Image, ImageOps
+from PIL import Image, ImageEnhance, ImageFilter, ImageOps
 
 
 MAX_PDF_PAGES = int(os.getenv("MAX_PDF_PAGES", "8"))
 OCR_ENGINE = "tesseract"
-MAX_IMAGE_SIDE = int(os.getenv("MAX_IMAGE_SIDE", "1500"))
+MAX_IMAGE_SIDE = int(os.getenv("MAX_IMAGE_SIDE", "2200"))
+MIN_IMAGE_SIDE = int(os.getenv("MIN_IMAGE_SIDE", "1800"))
 ROTATIONS = (0, 90, 270)
+PSM_MODES = ("6", "11")
 ID_LABELS = (
     "\u59d3\u540d",
     "\u6027\u522b",
@@ -145,7 +147,7 @@ def recognize_best(image: Image.Image, mode: str, doc_type: str):
     best = ("", 0, -10_000)
     for rotation in ROTATIONS:
         candidate = image.rotate(rotation, expand=True) if rotation else image
-        text = recognize_image(candidate)
+        text = recognize_image(candidate, mode=mode)
         score = score_text(text, mode=mode, doc_type=doc_type)
         if score > best[2]:
             best = (text, rotation, score)
@@ -154,36 +156,49 @@ def recognize_best(image: Image.Image, mode: str, doc_type: str):
     return best
 
 
-def recognize_image(image: Image.Image) -> str:
-    image = prepare_for_ocr(image)
-    with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as temp:
-        temp_path = temp.name
-        image.save(temp_path, "JPEG", quality=82, optimize=True)
+def recognize_image(image: Image.Image, mode: str) -> str:
+    candidates = prepare_candidates(image)
+    best = ("", -10_000)
+    modes = PSM_MODES if mode == "id" else ("6", "11")
+    for candidate in candidates:
+        with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as temp:
+            temp_path = temp.name
+            candidate.save(temp_path, "PNG", optimize=True)
+        try:
+            for psm in modes:
+                text = tesseract_text(temp_path, psm=psm)
+                score = score_text(text, mode=mode, doc_type="")
+                if score > best[1]:
+                    best = (text, score)
+        finally:
+            Path(temp_path).unlink(missing_ok=True)
+    return best[0]
 
-    try:
-        return tesseract_text(temp_path)
-    finally:
-        Path(temp_path).unlink(missing_ok=True)
 
-    return ""
-
-
-def prepare_for_ocr(image: Image.Image) -> Image.Image:
+def prepare_candidates(image: Image.Image) -> list[Image.Image]:
     image = ImageOps.exif_transpose(image).convert("L")
     width, height = image.size
     longest = max(width, height)
     if longest > MAX_IMAGE_SIDE:
         ratio = MAX_IMAGE_SIDE / longest
         image = image.resize((max(1, int(width * ratio)), max(1, int(height * ratio))))
-    return ImageOps.autocontrast(image)
+    elif longest < MIN_IMAGE_SIDE:
+        ratio = min(MIN_IMAGE_SIDE / longest, 2.5)
+        image = image.resize((max(1, int(width * ratio)), max(1, int(height * ratio))))
+    image = ImageOps.autocontrast(image)
+    image = ImageEnhance.Contrast(image).enhance(1.35)
+    sharp = image.filter(ImageFilter.SHARPEN)
+    threshold = sharp.point(lambda value: 255 if value > 168 else 0)
+    inverted_threshold = ImageOps.invert(sharp).point(lambda value: 255 if value > 168 else 0)
+    return [sharp, threshold, inverted_threshold]
 
 
-def tesseract_text(image_path: str) -> str:
+def tesseract_text(image_path: str, psm: str) -> str:
     env = os.environ.copy()
     env["OMP_THREAD_LIMIT"] = "1"
     env["OMP_NUM_THREADS"] = "1"
     completed = subprocess.run(
-        ["tesseract", image_path, "stdout", "-l", "chi_sim+eng", "--psm", "6", "--dpi", "180"],
+        ["tesseract", image_path, "stdout", "-l", "chi_sim+eng", "--psm", psm, "--dpi", "240"],
         check=False,
         capture_output=True,
         env=env,

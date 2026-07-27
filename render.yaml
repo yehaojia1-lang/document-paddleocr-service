@@ -20,4 +20,6 @@ services:
       - key: MAX_PDF_PAGES
         value: "8"
       - key: MAX_IMAGE_SIDE
-        value: "1500"
+        value: "2200"
+      - key: MIN_IMAGE_SIDE
+        value: "1800"

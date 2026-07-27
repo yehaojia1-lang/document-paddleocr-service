@@ -8,7 +8,14 @@ const server = http.createServer(async (req, res) => {
     const url = new URL(req.url || "/", `http://${req.headers.host}`);
     if (req.method === "HEAD" && url.pathname === "/") return sendEmpty(res, 200);
     if (req.method === "GET" && url.pathname === "/") return sendHtml(res);
-    if (req.method === "GET" && url.pathname === "/health") return sendJson(res, 200, { ok: true });
+    if (req.method === "GET" && url.pathname === "/health") {
+      return sendJson(res, 200, {
+        ok: true,
+        ocrService: OCR_SERVICE_URL,
+        deepseek: Boolean(process.env.DEEPSEEK_API_KEY),
+        openai: Boolean(process.env.OPENAI_API_KEY),
+      });
+    }
     if (req.method === "POST" && url.pathname === "/api/ocr") return proxyOcr(req, res);
     if (req.method === "POST" && url.pathname === "/api/translate") return translate(req, res);
     sendText(res, 404, "Not found");
@@ -35,15 +42,23 @@ async function proxyOcr(req, res) {
 
 async function translate(req, res) {
   const payload = JSON.parse((await readBody(req)).toString("utf8") || "{}");
-  const text = typeof payload.text === "string" ? payload.text : "";
+  const text = typeof payload.text === "string" ? payload.text.trim() : "";
   const direction = payload.direction === "en-to-zh" ? "en-to-zh" : "zh-to-en";
   const provider = payload.provider === "openai" || payload.provider === "deepseek" || payload.provider === "offline" ? payload.provider : "auto";
   const docType = typeof payload.docType === "string" ? payload.docType : "other";
 
+  if (!text) return sendJson(res, 400, { error: "No OCR text was provided." });
+
   const providers = provider === "auto" ? ["deepseek", "openai"] : [provider];
   for (const name of providers) {
-    const result = await callModel(name, text, direction, docType).catch(() => null);
-    if (result) return sendJson(res, 200, result);
+    const result = await callModel(name, text, direction, docType).catch((error) => ({
+      error: error instanceof Error ? error.message : "Model request failed",
+    }));
+    if (result && !result.error) return sendJson(res, 200, result);
+  }
+
+  if (provider === "deepseek" || provider === "openai") {
+    return sendJson(res, 200, modelUnavailable(provider, direction));
   }
 
   sendJson(res, 200, offlineTranslate(text, direction));
@@ -68,20 +83,55 @@ async function callModel(provider, text, direction, docType) {
       messages: [
         {
           role: "system",
-          content:
-            "You are a professional certified document translator. Translate all visible OCR text completely. Preserve document numbers, dates, ID numbers and codes exactly. English address order must be small-to-large. Chinese address order must be large-to-small. Return only JSON with keys mode,title,summary,fields,polished,notes. fields is an array of {label,source,translation}.",
+          content: [
+            "You are a professional certified document translator and OCR cleanup assistant.",
+            "The OCR text may contain noise, wrong line breaks, missing labels, or mixed languages. Correct only obvious OCR errors from context. If a value is unreadable, write 'illegible' or '无法辨认'.",
+            "Translate every visible item completely. Do not omit labels, numbers, dates, addresses, document numbers, restrictions, issuing authorities, signatures, notes, categories, or back-side text.",
+            "Preserve document numbers, ID numbers, license numbers, dates and codes exactly unless a character is clearly OCR noise.",
+            "Address order is mandatory: English output uses small-to-large order, such as room/number/road/district/city/province/country. Chinese output uses large-to-small order.",
+            "For Chinese ID cards, extract and translate these fields when present: document title, name, sex, ethnicity, date of birth, full address, citizen ID number.",
+            "For driver licenses, extract and translate these fields when present: document title, surname/name, date/place of birth, issue date, expiry date, issuing authority, license number, categories, address, restrictions.",
+            "Do not merely repeat the OCR. The polished field must be a complete professional translation ready to copy.",
+            "Return only JSON with keys mode,title,summary,fields,polished,notes. fields is an array of {label,source,translation}.",
+          ].join("\n"),
         },
         {
           role: "user",
-          content: `Document type: ${docType}\nDirection: ${direction}\nOCR text:\n${text}`,
+          content: `Document type: ${docType}
+Target language: ${direction === "en-to-zh" ? "Simplified Chinese" : "professional English"}
+OCR text:
+${text}`,
         },
       ],
     }),
   });
-  if (!response.ok) return null;
+  if (!response.ok) throw new Error(`Model HTTP ${response.status}`);
   const data = await response.json();
   const content = data?.choices?.[0]?.message?.content;
-  return typeof content === "string" ? JSON.parse(content) : null;
+  if (typeof content !== "string") throw new Error("Model returned no content");
+  return normalizeModelResult(JSON.parse(content), provider);
+}
+
+function normalizeModelResult(value, provider) {
+  return {
+    mode: typeof value.mode === "string" ? value.mode : provider,
+    title: typeof value.title === "string" ? value.title : "Professional Document Translation",
+    summary: typeof value.summary === "string" ? value.summary : "The translation was generated by the selected model.",
+    fields: Array.isArray(value.fields) ? value.fields : [],
+    polished: typeof value.polished === "string" ? value.polished : "",
+    notes: Array.isArray(value.notes) ? value.notes : [],
+  };
+}
+
+function modelUnavailable(provider, direction) {
+  return {
+    mode: "model unavailable",
+    title: provider === "deepseek" ? "DeepSeek 未接通" : "OpenAI 未接通",
+    summary: `当前选择了 ${provider}，但服务端没有可用密钥，或模型调用失败，所以没有生成专业译文。`,
+    fields: [],
+    polished: direction === "zh-to-en" ? "Model unavailable. Please configure the API key and redeploy." : "模型不可用。请配置 API 密钥并重新部署。",
+    notes: ["如果刚刚添加了 API key，请在 Render 里重新部署前端服务。"],
+  };
 }
 
 function offlineTranslate(text, direction) {
@@ -97,7 +147,7 @@ function offlineTranslate(text, direction) {
     summary: "未配置模型密钥，已使用离线规则。请先校对 OCR 原文，尤其是姓名、地址、日期和证件号码。",
     fields,
     polished: fields.map((field) => `${field.label}: ${field.translation}`).join("\n"),
-    notes: ["离线翻译只能处理常见证件字段；专业长文本建议配置 DeepSeek 或 OpenAI API。"],
+    notes: ["离线翻译只能处理常见证件字段；专业完整译文建议配置 DeepSeek 或 OpenAI API。"],
   };
 }
 
@@ -258,6 +308,10 @@ $("translateBtn").addEventListener("click", async () => {
   $("result").textContent = "正在生成译文...";
   const res = await fetch("/api/translate", { method:"POST", headers:{"content-type":"application/json"}, body: JSON.stringify({ text, direction:$("direction").value, docType:$("docType").value, provider:$("provider").value }) });
   const data = await res.json();
+  if (data.error) {
+    $("result").textContent = data.error;
+    return;
+  }
   const fields = Array.isArray(data.fields) ? data.fields.map(f => (f.label || "Text") + ": " + (f.translation || "")).join("\\n") : "";
   $("result").textContent = [data.title, data.summary, fields, data.polished].filter(Boolean).join("\\n\\n");
 });
