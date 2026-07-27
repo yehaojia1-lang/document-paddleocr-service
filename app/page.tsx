@@ -1,279 +1,294 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 
-type Scene = "hello" | "confirm" | "afterTea" | "dinner" | "drinks" | "ticket";
+type Direction = "en-to-zh" | "zh-to-en";
+type Provider = "auto" | "openai" | "deepseek" | "offline";
+type DocType = "driver-license" | "id-card" | "graduation-certificate" | "degree-certificate" | "birth-certificate" | "address-proof" | "other";
 
-const afterTeaPlans = [
-  {
-    id: "citywalk",
-    title: "江南西随便逛逛",
-    detail: "不赶行程，看到有意思的小店就进去看看，适合慢慢聊天。",
-  },
-  {
-    id: "photo",
-    title: "拍照 / 大头贴",
-    detail: "找个好看的地方拍几张照，或者去拍大头贴，轻松一点。",
-  },
-  {
-    id: "arcade",
-    title: "电玩城抓娃娃",
-    detail: "不用一直讲话也不会冷场，玩一会儿刚好等到饭点。",
-  },
-  {
-    id: "movie",
-    title: "看场轻松电影",
-    detail: "如果天气热或者不想走路，就看有没有合适场次。",
-  },
+type FieldResult = {
+  label: string;
+  source: string;
+  translation: string;
+};
+
+type TranslationResult = {
+  mode: string;
+  title: string;
+  summary: string;
+  fields: FieldResult[];
+  polished: string;
+  notes: string[];
+};
+
+const samples: Record<Direction, string> = {
+  "en-to-zh":
+    "DRIVER LICENSE\nName: Alex Chen\nAddress: 1288 Market Street, Apt 19B, San Francisco, CA 94102, USA\nDate of Birth: 05/18/1992\nClass: C\nExpires: 08/31/2029",
+  "zh-to-en":
+    "中华人民共和国居民身份证\n姓名：陈明\n性别：男\n民族：汉\n出生：1992年5月18日\n住址：广东省广州市天河区珠江新城华夏路16号富力盈凯广场A座1808室\n公民身份号码：440106199205180018",
+};
+
+const docTypes: { id: DocType; label: string }[] = [
+  { id: "driver-license", label: "驾照" },
+  { id: "id-card", label: "身份证" },
+  { id: "graduation-certificate", label: "毕业证" },
+  { id: "degree-certificate", label: "学位证" },
+  { id: "birth-certificate", label: "出生证" },
+  { id: "address-proof", label: "地址证明" },
+  { id: "other", label: "其他证件" },
 ];
-
-const dinnerOptions = [
-  {
-    id: "cantonese",
-    title: "粤菜 / 茶餐厅",
-    detail: "稳一点，不太容易踩雷，也适合慢慢吃。",
-  },
-  {
-    id: "japanese",
-    title: "日料 / 寿司",
-    detail: "清爽一点，下午吃了抹茶之后也不会太腻。",
-  },
-  {
-    id: "bbq",
-    title: "烤肉",
-    detail: "气氛会热一点，但不会太正式，适合边吃边聊。",
-  },
-  {
-    id: "hotpot",
-    title: "火锅",
-    detail: "如果我们都饿了，这个最有安全感。",
-  },
-  {
-    id: "western",
-    title: "意面 / 西餐",
-    detail: "安静一点，比较适合吃完就舒服回家。",
-  },
-  {
-    id: "youPick",
-    title: "美羊羊来定",
-    detail: "我负责查路线和排队情况，你负责选你想吃的。",
-  },
-];
-
-const drinkOptions = ["果茶", "咖啡", "奶茶", "气泡水", "冰淇淋", "你想喝的"];
 
 export default function Home() {
-  const [scene, setScene] = useState<Scene>("hello");
-  const [afterTeaId, setAfterTeaId] = useState(afterTeaPlans[0].id);
-  const [dinnerId, setDinnerId] = useState(dinnerOptions[0].id);
-  const [drinks, setDrinks] = useState<string[]>(["果茶"]);
-  const [copied, setCopied] = useState(false);
-  const [shyCount, setShyCount] = useState(0);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [direction, setDirection] = useState<Direction>("en-to-zh");
+  const [docType, setDocType] = useState<DocType>("driver-license");
+  const [provider, setProvider] = useState<Provider>("auto");
+  const [imageUrl, setImageUrl] = useState("");
+  const [sourceText, setSourceText] = useState(samples["en-to-zh"]);
+  const [ocrStatus, setOcrStatus] = useState("等待上传图片");
+  const [ocrProgress, setOcrProgress] = useState(0);
+  const [isReading, setIsReading] = useState(false);
+  const [isTranslating, setIsTranslating] = useState(false);
+  const [result, setResult] = useState<TranslationResult | null>(null);
 
-  const afterTea = afterTeaPlans.find((item) => item.id === afterTeaId) ?? afterTeaPlans[0];
-  const dinner = dinnerOptions.find((item) => item.id === dinnerId) ?? dinnerOptions[0];
+  const targetLabel = direction === "en-to-zh" ? "翻译成中文" : "Translate to English";
+  const sourceLabel = direction === "en-to-zh" ? "英文证件内容" : "中文证件内容";
 
-  const message = useMemo(
-    () =>
-      `美羊羊，周日下午江南西抹茶之后，我们可以先「${afterTea.title}」：${afterTea.detail} 晚餐我想选「${dinner.title}」：${dinner.detail} 中间如果想喝点东西，可以选：${drinks.length ? drinks.join("、") : "到时候随缘"}。吃完晚饭就送你回家/各自回家，不把行程排太满。你看这个节奏可以吗？`,
-    [afterTea.detail, afterTea.title, dinner.detail, dinner.title, drinks],
-  );
+  const confidence = useMemo(() => {
+    if (!sourceText.trim()) return "未识别";
+    if (sourceText.length > 120 && result?.fields.length) return "高";
+    if (sourceText.length > 40) return "中";
+    return "待校对";
+  }, [result?.fields.length, sourceText]);
 
-  function toggleDrink(item: string) {
-    setCopied(false);
-    setDrinks((current) => (current.includes(item) ? current.filter((value) => value !== item) : [...current, item]));
+  function switchDirection(next: Direction) {
+    setDirection(next);
+    setDocType(next === "en-to-zh" ? "driver-license" : "id-card");
+    setSourceText(samples[next]);
+    setResult(null);
+    setOcrStatus("已载入示例，可直接翻译");
+    setOcrProgress(0);
   }
 
-  async function copyMessage() {
-    await navigator.clipboard.writeText(message);
-    setCopied(true);
+  async function handleFile(file: File | undefined) {
+    if (!file) return;
+    setResult(null);
+    setImageUrl(URL.createObjectURL(file));
+    setIsReading(true);
+    setOcrProgress(0.05);
+    setOcrStatus("正在读取图片文字");
+
+    try {
+      const { recognize } = await import("tesseract.js");
+      const language = direction === "zh-to-en" ? "chi_sim+eng" : "eng+chi_sim";
+      const response = await recognize(file, language, {
+        logger: (message: { status?: string; progress?: number }) => {
+          if (typeof message.progress === "number") {
+            setOcrProgress(Math.max(0.08, Math.min(0.98, message.progress)));
+          }
+          if (message.status) setOcrStatus(readableOcrStatus(message.status));
+        },
+      });
+
+      const text = response.data.text.trim();
+      setSourceText(text || "");
+      setOcrStatus(text ? "识别完成，请校对后翻译" : "没有识别到文字，请换一张更清晰的图片");
+      setOcrProgress(text ? 1 : 0);
+    } catch {
+      setOcrStatus("OCR 加载失败，可以先手动粘贴文字翻译");
+      setOcrProgress(0);
+    } finally {
+      setIsReading(false);
+    }
+  }
+
+  async function translate() {
+    if (!sourceText.trim()) return;
+    setIsTranslating(true);
+    setResult(null);
+
+    try {
+      const response = await fetch("/api/translate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ direction, docType, provider, text: sourceText }),
+      });
+      const data = (await response.json()) as TranslationResult;
+      setResult(data);
+    } catch {
+      setResult({
+        mode: "offline",
+        title: "离线规则译文",
+        summary: "网络不可用时生成的基础译文，建议人工复核姓名、号码和地址门牌。",
+        fields: [],
+        polished: sourceText,
+        notes: ["接口暂时不可用，已保留原文供校对。"],
+      });
+    } finally {
+      setIsTranslating(false);
+    }
+  }
+
+  async function copyResult() {
+    if (!result) return;
+    const fields = result.fields.map((field) => `${field.label}: ${field.translation}`).join("\n");
+    await navigator.clipboard.writeText(`${result.title}\n\n${fields}\n\n${result.polished}`);
   }
 
   return (
-    <main className="app-shell">
-      <FloatingFlowers />
-      <section className="phone" aria-live="polite">
-        <div className="phone-top">
-          <span className="dot" />
-          <span>To 美羊羊 ~</span>
-          <button type="button" aria-label="关闭">
-            x
-          </button>
-        </div>
-
-        {scene === "hello" ? (
-          <Card icon="matcha" eyebrow="给美羊羊的小纸条" title="美羊羊，帮我选一下">
-            <p>
-              周日下午我们约了江南西抹茶和晚餐，但中间那段、还有晚餐吃什么，我想让你选一个舒服的版本。
+    <main className="translator-shell">
+      <section className="workspace">
+        <header className="hero-panel">
+          <div>
+            <p className="eyebrow">Document OCR Translation Desk</p>
+            <h1>证件图片自动识别与专业翻译</h1>
+            <p className="hero-copy">
+              上传驾照、身份证、毕业证、学位证、出生证或地址证明，先识别图片里的所有文字，再按你的标准模板表达生成完整中英译文。
             </p>
-            <button className="hot-button" type="button" onClick={() => setScene("confirm")}>
-              点开看看
+          </div>
+          <div className="status-strip" aria-label="处理状态">
+            <span>OCR {isReading ? "读取中" : "就绪"}</span>
+            <span>可信度 {confidence}</span>
+            <span>{provider === "offline" ? "离线规则" : "可接模型"}</span>
+          </div>
+        </header>
+
+        <section className="control-bar" aria-label="翻译设置">
+          <div className="segmented">
+            <button className={direction === "en-to-zh" ? "active" : ""} onClick={() => switchDirection("en-to-zh")} type="button">
+              驾照/英文到中文
             </button>
-          </Card>
-        ) : null}
+            <button className={direction === "zh-to-en" ? "active" : ""} onClick={() => switchDirection("zh-to-en")} type="button">
+              身份证/中文到英文
+            </button>
+          </div>
 
-        {scene === "confirm" ? (
-          <Card icon="spark" eyebrow="美羊羊先确认一下" title="这个不是表白程序">
-            <p>只是一个认真安排周日下午的小网页。不会突然给你压力，也不会把行程排得很满。</p>
-            <div className="button-row">
-              <button className="hot-button" type="button" onClick={() => setScene("afterTea")}>
-                好啦好啦
-              </button>
-              <button
-                className="ghost-run"
-                style={{ transform: `translate(${shyCount * 10}px, ${shyCount % 2 ? -8 : 8}px)` }}
-                type="button"
-                onClick={() => setShyCount((value) => value + 1)}
-              >
-                我有点警觉
-              </button>
-            </div>
-          </Card>
-        ) : null}
-
-        {scene === "afterTea" ? (
-          <Card icon="flower" eyebrow="问美羊羊" title="抹茶之后去干嘛？">
-            <div className="plan-list">
-              {afterTeaPlans.map((item) => (
-                <button
-                  className={afterTeaId === item.id ? "plan active" : "plan"}
-                  key={item.id}
-                  onClick={() => {
-                    setAfterTeaId(item.id);
-                    setCopied(false);
-                  }}
-                  type="button"
-                >
-                  <strong>{item.title}</strong>
-                  <span>{item.detail}</span>
-                </button>
+          <label>
+            证件类型
+            <select value={docType} onChange={(event) => setDocType(event.target.value as DocType)}>
+              {docTypes.map((item) => (
+                <option key={item.id} value={item.id}>
+                  {item.label}
+                </option>
               ))}
-            </div>
-            <button className="hot-button wide" type="button" onClick={() => setScene("dinner")}>
-              选好了
-            </button>
-          </Card>
-        ) : null}
+            </select>
+          </label>
 
-        {scene === "dinner" ? (
-          <Card icon="dinner" eyebrow="再问美羊羊" title="晚上想吃什么？">
-            <div className="plan-list compact">
-              {dinnerOptions.map((item) => (
-                <button
-                  className={dinnerId === item.id ? "plan active" : "plan"}
-                  key={item.id}
-                  onClick={() => {
-                    setDinnerId(item.id);
-                    setCopied(false);
-                  }}
-                  type="button"
-                >
-                  <strong>{item.title}</strong>
-                  <span>{item.detail}</span>
-                </button>
-              ))}
-            </div>
-            <button className="hot-button wide" type="button" onClick={() => setScene("drinks")}>
-              下一步
-            </button>
-          </Card>
-        ) : null}
+          <label>
+            翻译引擎
+            <select value={provider} onChange={(event) => setProvider(event.target.value as Provider)}>
+              <option value="auto">自动选择</option>
+              <option value="openai">OpenAI GPT</option>
+              <option value="deepseek">DeepSeek</option>
+              <option value="offline">离线规则</option>
+            </select>
+          </label>
+        </section>
 
-        {scene === "drinks" ? (
-          <Card icon="drink" eyebrow="可以多选" title="还想喝点什么？">
-            <p className="soft-line">抹茶是主线，这里只是备用饮料清单。美羊羊可以多选，也可以一个都不选。</p>
-            <div className="drink-grid">
-              {drinkOptions.map((item) => (
-                <button
-                  className={drinks.includes(item) ? "drink active" : "drink"}
-                  key={item}
-                  onClick={() => toggleDrink(item)}
-                  type="button"
-                >
-                  {item}
-                </button>
-              ))}
-            </div>
-            <button className="hot-button wide" type="button" onClick={() => setScene("ticket")}>
-              生成小票
-            </button>
-          </Card>
-        ) : null}
-
-        {scene === "ticket" ? (
-          <Card icon="sheep" eyebrow="美羊羊的约会小票" title="路线暂定成功">
-            <p className="soft-line">周日下午，江南西。先抹茶，再玩一会儿，吃完晚餐就回家。</p>
-            <div className="ticket">
+        <section className="main-grid">
+          <div className="panel upload-panel">
+            <div className="panel-heading">
               <div>
-                <span>For</span>
-                <strong>美羊羊</strong>
+                <p className="eyebrow">Step 1</p>
+                <h2>上传证件图片</h2>
               </div>
-              <div>
-                <span>Tea</span>
-                <strong>江南西抹茶</strong>
-              </div>
-              <div>
-                <span>After Tea</span>
-                <strong>{afterTea.title}</strong>
-              </div>
-              <div>
-                <span>Dinner</span>
-                <strong>{dinner.title}</strong>
-              </div>
-              <div>
-                <span>Drinks</span>
-                <strong>{drinks.length ? drinks.join("、") : "随缘"}</strong>
-              </div>
-              <div>
-                <span>Ending</span>
-                <strong>晚餐后回家</strong>
-              </div>
-            </div>
-            <p className="copy-text">{message}</p>
-            <div className="button-row">
-              <button className="hot-button" type="button" onClick={copyMessage}>
-                {copied ? "已复制" : "复制发给我"}
-              </button>
-              <button className="plain-button" type="button" onClick={() => setScene("afterTea")}>
-                改一下
+              <button className="icon-button" onClick={() => fileInputRef.current?.click()} type="button" aria-label="选择图片">
+                +
               </button>
             </div>
-          </Card>
-        ) : null}
+
+            <button className="drop-zone" onClick={() => fileInputRef.current?.click()} type="button">
+              {imageUrl ? <img alt="已上传证件预览" src={imageUrl} /> : <span>点击上传 JPG、PNG 或截图</span>}
+            </button>
+            <input
+              accept="image/*"
+              hidden
+              ref={fileInputRef}
+              type="file"
+              onChange={(event) => handleFile(event.target.files?.[0])}
+            />
+
+            <div className="progress-wrap">
+              <div className="progress-label">
+                <span>{ocrStatus}</span>
+                <strong>{Math.round(ocrProgress * 100)}%</strong>
+              </div>
+              <div className="progress-track">
+                <span style={{ width: `${ocrProgress * 100}%` }} />
+              </div>
+            </div>
+
+            <label className="text-editor">
+              {sourceLabel}
+              <textarea value={sourceText} onChange={(event) => setSourceText(event.target.value)} />
+            </label>
+          </div>
+
+          <div className="panel result-panel">
+            <div className="panel-heading">
+              <div>
+                <p className="eyebrow">Step 2</p>
+                <h2>{targetLabel}</h2>
+              </div>
+              <button className="primary-button" disabled={isTranslating || !sourceText.trim()} onClick={translate} type="button">
+                {isTranslating ? "翻译中" : "生成译文"}
+              </button>
+            </div>
+
+            {result ? (
+              <div className="result-stack">
+                <div className="translation-summary">
+                  <span>{result.mode}</span>
+                  <strong>{result.title}</strong>
+                  <p>{result.summary}</p>
+                </div>
+
+                <div className="field-table">
+                  {result.fields.map((field) => (
+                    <div className="field-row" key={`${field.label}-${field.source}`}>
+                      <span>{field.label}</span>
+                      <p>{field.source}</p>
+                      <strong>{field.translation}</strong>
+                    </div>
+                  ))}
+                </div>
+
+                <article className="polished-output">
+                  <h3>完整专业译文</h3>
+                  <p>{result.polished}</p>
+                </article>
+
+                <div className="notes">
+                  {result.notes.map((note) => (
+                    <span key={note}>{note}</span>
+                  ))}
+                </div>
+
+                <button className="secondary-button" onClick={copyResult} type="button">
+                  复制译文
+                </button>
+              </div>
+            ) : (
+              <div className="empty-state">
+                <strong>译文将在这里生成</strong>
+                <p>建议先检查 OCR 文本，重点看有没有漏字、号码错误、日期错误，以及地址是否包含楼栋、房号、州省、市区和邮编。</p>
+              </div>
+            )}
+          </div>
+        </section>
       </section>
     </main>
   );
 }
 
-function Card({
-  children,
-  eyebrow,
-  icon,
-  title,
-}: {
-  children: React.ReactNode;
-  eyebrow: string;
-  icon: "matcha" | "spark" | "flower" | "dinner" | "drink" | "sheep";
-  title: string;
-}) {
-  return (
-    <div className="card">
-      <div className={`icon ${icon}`} aria-hidden="true" />
-      <p className="eyebrow">{eyebrow}</p>
-      <h1>{title}</h1>
-      {children}
-    </div>
-  );
-}
+function readableOcrStatus(status: string) {
+  const map: Record<string, string> = {
+    "loading tesseract core": "正在加载 OCR 核心",
+    "initializing tesseract": "正在初始化 OCR",
+    "loading language traineddata": "正在加载语言包",
+    "initializing api": "正在准备识别",
+    "recognizing text": "正在识别文字",
+  };
 
-function FloatingFlowers() {
-  return (
-    <>
-      <span className="flower f1">✿</span>
-      <span className="flower f2">✿</span>
-      <span className="flower f3">✿</span>
-      <span className="flower f4">✿</span>
-      <span className="flower f5">✿</span>
-    </>
-  );
+  return map[status] ?? status;
 }

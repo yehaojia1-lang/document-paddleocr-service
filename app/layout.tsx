@@ -13,8 +13,8 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "给美羊羊的江南西小纸条",
-  description: "给美羊羊选择下午茶后安排和晚餐的小互动网页。",
+  title: "证件完整翻译工具",
+  description: "上传证件图片，OCR 识别全部可见文字，并生成中英双向专业译文。",
   icons: {
     icon: "/favicon.svg",
     shortcut: "/favicon.svg",
