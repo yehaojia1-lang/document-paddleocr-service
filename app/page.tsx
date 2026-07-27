@@ -93,18 +93,18 @@ export default function Home() {
     try {
       if (kind === "pdf") {
         setReadStatus("正在提取 PDF 可复制文字");
-        const text = await extractPdfText(file);
+        const text = await extractPdfTextWithFallback(file, setReadProgress, setReadStatus);
         setSourceText(text);
-        setReadStatus(text ? "PDF 文字提取完成，请检查是否有扫描页漏识别" : "这个 PDF 可能是扫描件，请上传页面图片或使用模型 OCR");
+        setReadStatus(text ? "PDF 读取完成：已合并文字层和扫描页 OCR" : "没有读到内容，请检查 PDF 是否加密或图片过低清");
         setReadProgress(text ? 1 : 0);
         return;
       }
 
       if (kind === "word") {
         setReadStatus("正在读取 Word 文档文字");
-        const text = await extractWordText(file);
+        const text = await extractWordTextWithFallback(file, setReadProgress, setReadStatus);
         setSourceText(text);
-        setReadStatus(text ? "Word 文字读取完成，请检查页眉页脚或图片文字是否遗漏" : "没有读到 Word 正文文字");
+        setReadStatus(text ? "Word 读取完成：已合并正文和内嵌图片 OCR" : "没有读到内容，请检查 Word 是否加密或图片过低清");
         setReadProgress(text ? 1 : 0);
         return;
       }
@@ -319,26 +319,93 @@ function detectFileKind(file: File): FileKind {
   return "unknown";
 }
 
-async function extractPdfText(file: File) {
+async function extractPdfTextWithFallback(
+  file: File,
+  setProgress: (progress: number) => void,
+  setStatus: (status: string) => void,
+) {
   const pdfjs = (await import("pdfjs-dist")) as any;
   pdfjs.GlobalWorkerOptions.workerSrc = `https://cdn.jsdelivr.net/npm/pdfjs-dist@${pdfjs.version}/build/pdf.worker.min.mjs`;
   const document = await pdfjs.getDocument({ data: await file.arrayBuffer() }).promise;
   const pages: string[] = [];
 
   for (let pageNumber = 1; pageNumber <= document.numPages; pageNumber += 1) {
+    setStatus(`正在读取 PDF 第 ${pageNumber} 页文字层`);
+    setProgress(Math.min(0.82, pageNumber / Math.max(1, document.numPages) * 0.42));
     const page = await document.getPage(pageNumber);
     const content = await page.getTextContent();
     const text = content.items.map((item: { str?: string }) => item.str ?? "").join(" ");
-    pages.push(`第 ${pageNumber} 页\n${text}`);
+    if (text.trim().length >= 20) {
+      pages.push(`第 ${pageNumber} 页\n${text}`);
+    } else {
+      setStatus(`PDF 第 ${pageNumber} 页像扫描页，正在转图片 OCR`);
+      const image = await renderPdfPageToCanvas(page);
+      const ocrText = await ocrCanvas(image);
+      if (ocrText.trim()) pages.push(`第 ${pageNumber} 页 OCR\n${ocrText}`);
+    }
   }
 
   return pages.join("\n\n").trim();
 }
 
-async function extractWordText(file: File) {
+async function extractWordTextWithFallback(
+  file: File,
+  setProgress: (progress: number) => void,
+  setStatus: (status: string) => void,
+) {
   const mammoth = (await import("mammoth")) as any;
-  const result = await mammoth.extractRawText({ arrayBuffer: await file.arrayBuffer() });
-  return String(result.value ?? "").trim();
+  const arrayBuffer = await file.arrayBuffer();
+  setStatus("正在提取 Word 正文");
+  setProgress(0.18);
+  const result = await mammoth.extractRawText({ arrayBuffer });
+  const parts = [String(result.value ?? "").trim()].filter(Boolean);
+
+  setStatus("正在检查 Word 内嵌图片");
+  setProgress(0.45);
+  const imageTexts = await extractWordImageText(arrayBuffer, setProgress, setStatus);
+  parts.push(...imageTexts);
+  return parts.join("\n\n").trim();
+}
+
+async function extractWordImageText(
+  arrayBuffer: ArrayBuffer,
+  setProgress: (progress: number) => void,
+  setStatus: (status: string) => void,
+) {
+  const JSZip = (await import("jszip")).default;
+  const zip = await JSZip.loadAsync(arrayBuffer);
+  const imageFiles = Object.values(zip.files).filter((entry) => /^word\/media\/.+\.(png|jpe?g|bmp|gif)$/i.test(entry.name));
+  const texts: string[] = [];
+
+  for (let index = 0; index < imageFiles.length; index += 1) {
+    const entry = imageFiles[index];
+    setStatus(`正在 OCR Word 图片 ${index + 1}/${imageFiles.length}`);
+    setProgress(0.48 + (index / Math.max(1, imageFiles.length)) * 0.45);
+    const blob = await entry.async("blob");
+    const text = await readImageText(new File([blob], entry.name), () => undefined, () => undefined);
+    if (text.trim()) texts.push(`Word 图片 ${index + 1} OCR\n${text}`);
+  }
+
+  return texts;
+}
+
+async function renderPdfPageToCanvas(page: any) {
+  const viewport = page.getViewport({ scale: 2.4 });
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.round(viewport.width);
+  canvas.height = Math.round(viewport.height);
+  const context = canvas.getContext("2d");
+  if (!context) return canvas;
+  await page.render({ canvasContext: context, viewport }).promise;
+  return cropAndPreprocess(await createImageBitmap(canvas), { x: 0, y: 0, w: 1, h: 1 });
+}
+
+async function ocrCanvas(canvas: HTMLCanvasElement) {
+  const { recognize } = await import("tesseract.js");
+  const response = await recognize(canvas, "chi_sim+eng", {
+    preserve_interword_spaces: "1",
+  });
+  return cleanupOcrText(response.data.text);
 }
 
 async function readImageText(
