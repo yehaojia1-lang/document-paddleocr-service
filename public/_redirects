@@ -1,0 +1,2 @@
+/api/ocr /.netlify/functions/ocr 200
+/api/translate /.netlify/functions/translate 200
