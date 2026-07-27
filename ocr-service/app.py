@@ -4,7 +4,6 @@ import re
 import subprocess
 import tempfile
 import zipfile
-from functools import lru_cache
 from pathlib import Path
 from typing import Iterable
 
@@ -15,8 +14,9 @@ from PIL import Image, ImageOps
 
 
 MAX_PDF_PAGES = int(os.getenv("MAX_PDF_PAGES", "8"))
-OCR_ENGINE = "rapidocr" if os.getenv("ENABLE_RAPIDOCR") == "1" else "tesseract"
-ROTATIONS = (0, 90, 270, 180)
+OCR_ENGINE = "tesseract"
+MAX_IMAGE_SIDE = int(os.getenv("MAX_IMAGE_SIDE", "1500"))
+ROTATIONS = (0, 90, 270)
 ID_LABELS = (
     "\u59d3\u540d",
     "\u6027\u522b",
@@ -64,6 +64,11 @@ def root():
     }
 
 
+@app.head("/")
+def root_head():
+    return None
+
+
 @app.post("/ocr")
 async def ocr(
     file: UploadFile = File(...),
@@ -77,19 +82,14 @@ async def ocr(
     suffix = Path(file.filename or "").suffix.lower()
     mime = file.content_type or ""
 
-    try:
-        images = list(load_images(data, suffix, mime))
-    except Exception as exc:
-        raise HTTPException(status_code=400, detail=f"Cannot read file: {exc}") from exc
-
-    if not images:
-        raise HTTPException(status_code=400, detail="No images found in file")
-
     pages = []
-    for index, image in enumerate(images, start=1):
-        text, rotation, score = recognize_best(image, mode=mode, doc_type=doc_type)
-        if text.strip():
-            pages.append({"index": index, "text": text, "rotation": rotation, "score": score})
+    try:
+        for index, image in enumerate(load_images(data, suffix, mime), start=1):
+            text, rotation, score = recognize_best(image, mode=mode, doc_type=doc_type)
+            if text.strip():
+                pages.append({"index": index, "text": text, "rotation": rotation, "score": score})
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"OCR failed: {exc}") from exc
 
     combined = "\n\n".join(f"Page {page['index']}\n{page['text']}" for page in pages).strip()
     return {
@@ -117,7 +117,7 @@ def render_pdf_pages(data: bytes) -> Iterable[Image.Image]:
     page_count = min(len(document), MAX_PDF_PAGES)
     for page_index in range(page_count):
         page = document[page_index]
-        bitmap = page.render(scale=2.6)
+        bitmap = page.render(scale=1.8)
         yield bitmap.to_pil()
 
 
@@ -155,19 +155,12 @@ def recognize_best(image: Image.Image, mode: str, doc_type: str):
 
 
 def recognize_image(image: Image.Image) -> str:
+    image = prepare_for_ocr(image)
     with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as temp:
         temp_path = temp.name
-        image.save(temp_path, "JPEG", quality=95)
+        image.save(temp_path, "JPEG", quality=82, optimize=True)
 
     try:
-        if OCR_ENGINE == "rapidocr":
-            try:
-                result, _ = get_ocr()(temp_path)
-                text = rapidocr_text(result)
-                if text.strip():
-                    return text
-            except Exception:
-                pass
         return tesseract_text(temp_path)
     finally:
         Path(temp_path).unlink(missing_ok=True)
@@ -175,31 +168,27 @@ def recognize_image(image: Image.Image) -> str:
     return ""
 
 
-def rapidocr_text(result) -> str:
-    lines = []
-    for item in result or []:
-        if len(item) >= 3:
-            text = str(item[1]).strip()
-            confidence = float(item[2] or 0)
-            if text and confidence >= 0.35:
-                lines.append(text)
-    return cleanup_text("\n".join(lines))
-
-
-@lru_cache(maxsize=1)
-def get_ocr():
-    from rapidocr_onnxruntime import RapidOCR
-
-    return RapidOCR()
+def prepare_for_ocr(image: Image.Image) -> Image.Image:
+    image = ImageOps.exif_transpose(image).convert("L")
+    width, height = image.size
+    longest = max(width, height)
+    if longest > MAX_IMAGE_SIDE:
+        ratio = MAX_IMAGE_SIDE / longest
+        image = image.resize((max(1, int(width * ratio)), max(1, int(height * ratio))))
+    return ImageOps.autocontrast(image)
 
 
 def tesseract_text(image_path: str) -> str:
+    env = os.environ.copy()
+    env["OMP_THREAD_LIMIT"] = "1"
+    env["OMP_NUM_THREADS"] = "1"
     completed = subprocess.run(
-        ["tesseract", image_path, "stdout", "-l", "chi_sim+eng", "--psm", "6"],
+        ["tesseract", image_path, "stdout", "-l", "chi_sim+eng", "--psm", "6", "--dpi", "180"],
         check=False,
         capture_output=True,
+        env=env,
         text=True,
-        timeout=80,
+        timeout=35,
     )
     return cleanup_text(completed.stdout)
 
