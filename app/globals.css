@@ -153,11 +153,28 @@ button {
     var(--pink);
 }
 
-.icon.heart {
+.icon.flower {
   background:
-    radial-gradient(circle at 35% 38%, #fffdfb 0 18%, transparent 19%),
-    radial-gradient(circle at 63% 38%, #fffdfb 0 18%, transparent 19%),
-    linear-gradient(45deg, transparent 38%, #fffdfb 39% 62%, transparent 63%),
+    radial-gradient(circle at 50% 24%, #fff7ae 0 15%, transparent 16%),
+    radial-gradient(circle at 72% 48%, #fff7ae 0 15%, transparent 16%),
+    radial-gradient(circle at 50% 72%, #fff7ae 0 15%, transparent 16%),
+    radial-gradient(circle at 28% 48%, #fff7ae 0 15%, transparent 16%),
+    radial-gradient(circle at 50% 50%, #fffdfb 0 14%, transparent 15%),
+    var(--pink);
+}
+
+.icon.dinner {
+  background:
+    radial-gradient(circle at 50% 48%, #fffdfb 0 27%, transparent 28%),
+    linear-gradient(90deg, transparent 25%, #fff7ae 26% 32%, transparent 33% 66%, #fff7ae 67% 73%, transparent 74%),
+    var(--pink);
+}
+
+.icon.drink {
+  background:
+    radial-gradient(circle at 50% 72%, #fffdfb 0 18%, transparent 19%),
+    linear-gradient(90deg, transparent 30%, #fff7ae 31% 38%, transparent 39%),
+    linear-gradient(#fffdfb 38%, transparent 39%),
     var(--pink);
 }
 
@@ -252,8 +269,16 @@ p {
   margin: 24px 0 4px;
 }
 
+.drink-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin: 8px 0 4px;
+}
+
 .pick,
-.plan {
+.plan,
+.drink {
   border: 3px solid var(--line);
   border-radius: 18px;
   background: #fffdfb;
@@ -268,8 +293,15 @@ p {
   font-weight: 900;
 }
 
+.drink {
+  min-height: 56px;
+  font-size: 18px;
+  font-weight: 900;
+}
+
 .pick.active,
-.plan.active {
+.plan.active,
+.drink.active {
   background: #fff0fb;
   border-color: var(--pink-dark);
   box-shadow: 4px 5px 0 rgba(239, 69, 188, 0.42);
@@ -280,6 +312,10 @@ p {
   gap: 10px;
   margin-top: 20px;
   text-align: left;
+}
+
+.plan-list.compact {
+  gap: 8px;
 }
 
 .plan {
@@ -298,12 +334,24 @@ p {
   line-height: 1.45;
 }
 
+.compact .plan {
+  padding: 12px;
+}
+
+.compact .plan strong {
+  font-size: 17px;
+}
+
 .ticket {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 10px;
   margin: 4px 0 18px;
   text-align: left;
+}
+
+.ticket div:first-child {
+  grid-column: 1 / -1;
 }
 
 .ticket div {

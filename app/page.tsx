@@ -2,47 +2,87 @@
 
 import { useMemo, useState } from "react";
 
-type Scene = "hello" | "confirm" | "time" | "after" | "ticket";
+type Scene = "hello" | "confirm" | "afterTea" | "dinner" | "drinks" | "ticket";
 
-const afterPlans = [
+const afterTeaPlans = [
   {
-    id: "walk",
-    title: "散步聊天",
-    detail: "吃完抹茶不急着散，沿江南西随便逛逛，看到舒服的店就进去坐。",
+    id: "citywalk",
+    title: "江南西随便逛逛",
+    detail: "不赶行程，看到有意思的小店就进去看看，适合慢慢聊天。",
   },
   {
     id: "photo",
-    title: "拍照小路线",
-    detail: "找好看的小店或街角拍几张照，轻轻松松留个周日下午的纪念。",
+    title: "拍照 / 大头贴",
+    detail: "找个好看的地方拍几张照，或者去拍大头贴，轻松一点。",
+  },
+  {
+    id: "arcade",
+    title: "电玩城抓娃娃",
+    detail: "不用一直讲话也不会冷场，玩一会儿刚好等到饭点。",
   },
   {
     id: "movie",
-    title: "看电影备用",
-    detail: "如果天气热或不想走太多，就现场看一场轻松电影，场次合适再决定。",
-  },
-  {
-    id: "dinner",
-    title: "顺便吃晚饭",
-    detail: "如果抹茶后还聊得开心，就再找一家不用排太久的小店吃晚饭。",
+    title: "看场轻松电影",
+    detail: "如果天气热或者不想走路，就看有没有合适场次。",
   },
 ];
 
-const times = ["14:30", "15:00", "15:30", "16:00"];
+const dinnerOptions = [
+  {
+    id: "cantonese",
+    title: "粤菜 / 茶餐厅",
+    detail: "稳一点，不太容易踩雷，也适合慢慢吃。",
+  },
+  {
+    id: "japanese",
+    title: "日料 / 寿司",
+    detail: "清爽一点，下午吃了抹茶之后也不会太腻。",
+  },
+  {
+    id: "bbq",
+    title: "烤肉",
+    detail: "气氛会热一点，但不会太正式，适合边吃边聊。",
+  },
+  {
+    id: "hotpot",
+    title: "火锅",
+    detail: "如果我们都饿了，这个最有安全感。",
+  },
+  {
+    id: "western",
+    title: "意面 / 西餐",
+    detail: "安静一点，比较适合吃完就舒服回家。",
+  },
+  {
+    id: "youPick",
+    title: "美羊羊来定",
+    detail: "我负责查路线和排队情况，你负责选你想吃的。",
+  },
+];
+
+const drinkOptions = ["果茶", "咖啡", "奶茶", "气泡水", "冰淇淋", "你想喝的"];
 
 export default function Home() {
   const [scene, setScene] = useState<Scene>("hello");
-  const [time, setTime] = useState("15:00");
-  const [planId, setPlanId] = useState("walk");
+  const [afterTeaId, setAfterTeaId] = useState(afterTeaPlans[0].id);
+  const [dinnerId, setDinnerId] = useState(dinnerOptions[0].id);
+  const [drinks, setDrinks] = useState<string[]>(["果茶"]);
   const [copied, setCopied] = useState(false);
   const [shyCount, setShyCount] = useState(0);
 
-  const plan = afterPlans.find((item) => item.id === planId) ?? afterPlans[0];
+  const afterTea = afterTeaPlans.find((item) => item.id === afterTeaId) ?? afterTeaPlans[0];
+  const dinner = dinnerOptions.find((item) => item.id === dinnerId) ?? dinnerOptions[0];
 
   const message = useMemo(
     () =>
-      `美羊羊，周日（8月2日）下午 ${time} 江南西吃抹茶可以吗？吃完之后我想安排「${plan.title}」：${plan.detail} 不会安排得很满，你舒服最重要。`,
-    [plan.detail, plan.title, time],
+      `美羊羊，周日下午江南西抹茶之后，我们可以先「${afterTea.title}」：${afterTea.detail} 晚餐我想选「${dinner.title}」：${dinner.detail} 中间如果想喝点东西，可以选：${drinks.length ? drinks.join("、") : "到时候随缘"}。吃完晚饭就送你回家/各自回家，不把行程排太满。你看这个节奏可以吗？`,
+    [afterTea.detail, afterTea.title, dinner.detail, dinner.title, drinks],
   );
+
+  function toggleDrink(item: string) {
+    setCopied(false);
+    setDrinks((current) => (current.includes(item) ? current.filter((value) => value !== item) : [...current, item]));
+  }
 
   async function copyMessage() {
     await navigator.clipboard.writeText(message);
@@ -55,13 +95,17 @@ export default function Home() {
       <section className="phone" aria-live="polite">
         <div className="phone-top">
           <span className="dot" />
-          <span>Dating with me ~</span>
-          <button type="button" aria-label="关闭">x</button>
+          <span>To 美羊羊 ~</span>
+          <button type="button" aria-label="关闭">
+            x
+          </button>
         </div>
 
         {scene === "hello" ? (
-          <Card icon="matcha" eyebrow="Hi 美羊羊" title="想问你一个小问题">
-            <p>周日下午我们不是约了去江南西吃抹茶嘛，我偷偷做了一个小网页，想把后半段也安排得舒服一点。</p>
+          <Card icon="matcha" eyebrow="给美羊羊的小纸条" title="美羊羊，帮我选一下">
+            <p>
+              周日下午我们约了江南西抹茶和晚餐，但中间那段、还有晚餐吃什么，我想让你选一个舒服的版本。
+            </p>
             <button className="hot-button" type="button" onClick={() => setScene("confirm")}>
               点开看看
             </button>
@@ -69,10 +113,10 @@ export default function Home() {
         ) : null}
 
         {scene === "confirm" ? (
-          <Card icon="spark" eyebrow="先确认一下" title="等下，你真的愿意继续看吗？">
-            <p>这个页面不会突然表白，也不会让你尴尬，只是想认真问问你：抹茶之后，要不要再一起待一会儿？</p>
+          <Card icon="spark" eyebrow="美羊羊先确认一下" title="这个不是表白程序">
+            <p>只是一个认真安排周日下午的小网页。不会突然给你压力，也不会把行程排得很满。</p>
             <div className="button-row">
-              <button className="hot-button" type="button" onClick={() => setScene("time")}>
+              <button className="hot-button" type="button" onClick={() => setScene("afterTea")}>
                 好啦好啦
               </button>
               <button
@@ -81,50 +125,72 @@ export default function Home() {
                 type="button"
                 onClick={() => setShyCount((value) => value + 1)}
               >
-                我再想想
+                我有点警觉
               </button>
             </div>
           </Card>
         ) : null}
 
-        {scene === "time" ? (
-          <Card icon="calendar" eyebrow="选个舒服的时间" title="周日几点见比较好？">
-            <div className="pick-grid">
-              {times.map((item) => (
-                <button
-                  className={time === item ? "pick active" : "pick"}
-                  key={item}
-                  onClick={() => {
-                    setTime(item);
-                    setCopied(false);
-                  }}
-                  type="button"
-                >
-                  {item}
-                </button>
-              ))}
-            </div>
-            <button className="hot-button wide" type="button" onClick={() => setScene("after")}>
-              确定时间
-            </button>
-          </Card>
-        ) : null}
-
-        {scene === "after" ? (
-          <Card icon="heart" eyebrow="抹茶之后" title="后面想去干嘛？">
+        {scene === "afterTea" ? (
+          <Card icon="flower" eyebrow="问美羊羊" title="抹茶之后去干嘛？">
             <div className="plan-list">
-              {afterPlans.map((item) => (
+              {afterTeaPlans.map((item) => (
                 <button
-                  className={planId === item.id ? "plan active" : "plan"}
+                  className={afterTeaId === item.id ? "plan active" : "plan"}
                   key={item.id}
                   onClick={() => {
-                    setPlanId(item.id);
+                    setAfterTeaId(item.id);
                     setCopied(false);
                   }}
                   type="button"
                 >
                   <strong>{item.title}</strong>
                   <span>{item.detail}</span>
+                </button>
+              ))}
+            </div>
+            <button className="hot-button wide" type="button" onClick={() => setScene("dinner")}>
+              选好了
+            </button>
+          </Card>
+        ) : null}
+
+        {scene === "dinner" ? (
+          <Card icon="dinner" eyebrow="再问美羊羊" title="晚上想吃什么？">
+            <div className="plan-list compact">
+              {dinnerOptions.map((item) => (
+                <button
+                  className={dinnerId === item.id ? "plan active" : "plan"}
+                  key={item.id}
+                  onClick={() => {
+                    setDinnerId(item.id);
+                    setCopied(false);
+                  }}
+                  type="button"
+                >
+                  <strong>{item.title}</strong>
+                  <span>{item.detail}</span>
+                </button>
+              ))}
+            </div>
+            <button className="hot-button wide" type="button" onClick={() => setScene("drinks")}>
+              下一步
+            </button>
+          </Card>
+        ) : null}
+
+        {scene === "drinks" ? (
+          <Card icon="drink" eyebrow="可以多选" title="还想喝点什么？">
+            <p className="soft-line">抹茶是主线，这里只是备用饮料清单。美羊羊可以多选，也可以一个都不选。</p>
+            <div className="drink-grid">
+              {drinkOptions.map((item) => (
+                <button
+                  className={drinks.includes(item) ? "drink active" : "drink"}
+                  key={item}
+                  onClick={() => toggleDrink(item)}
+                  type="button"
+                >
+                  {item}
                 </button>
               ))}
             </div>
@@ -135,24 +201,32 @@ export default function Home() {
         ) : null}
 
         {scene === "ticket" ? (
-          <Card icon="sheep" eyebrow="真开心你没有拒绝" title="我会准时来见你">
-            <p className="soft-line">8月2日 {time}，我们去江南西吃抹茶。带好胃口，我带好路线。</p>
+          <Card icon="sheep" eyebrow="美羊羊的约会小票" title="路线暂定成功">
+            <p className="soft-line">周日下午，江南西。先抹茶，再玩一会儿，吃完晚餐就回家。</p>
             <div className="ticket">
               <div>
-                <span>Date</span>
-                <strong>8月2日 周日</strong>
+                <span>For</span>
+                <strong>美羊羊</strong>
               </div>
               <div>
-                <span>Time</span>
-                <strong>{time}</strong>
+                <span>Tea</span>
+                <strong>江南西抹茶</strong>
               </div>
               <div>
-                <span>Place</span>
-                <strong>江南西</strong>
+                <span>After Tea</span>
+                <strong>{afterTea.title}</strong>
               </div>
               <div>
-                <span>After</span>
-                <strong>{plan.title}</strong>
+                <span>Dinner</span>
+                <strong>{dinner.title}</strong>
+              </div>
+              <div>
+                <span>Drinks</span>
+                <strong>{drinks.length ? drinks.join("、") : "随缘"}</strong>
+              </div>
+              <div>
+                <span>Ending</span>
+                <strong>晚餐后回家</strong>
               </div>
             </div>
             <p className="copy-text">{message}</p>
@@ -160,7 +234,7 @@ export default function Home() {
               <button className="hot-button" type="button" onClick={copyMessage}>
                 {copied ? "已复制" : "复制发给我"}
               </button>
-              <button className="plain-button" type="button" onClick={() => setScene("after")}>
+              <button className="plain-button" type="button" onClick={() => setScene("afterTea")}>
                 改一下
               </button>
             </div>
@@ -179,7 +253,7 @@ function Card({
 }: {
   children: React.ReactNode;
   eyebrow: string;
-  icon: "matcha" | "spark" | "calendar" | "heart" | "sheep";
+  icon: "matcha" | "spark" | "flower" | "dinner" | "drink" | "sheep";
   title: string;
 }) {
   return (

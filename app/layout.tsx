@@ -13,8 +13,8 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "江南西抹茶之后",
-  description: "一个轻松、不越界的周日下午邀约小页面。",
+  title: "给美羊羊的江南西小纸条",
+  description: "给美羊羊选择下午茶后安排和晚餐的小互动网页。",
   icons: {
     icon: "/favicon.svg",
     shortcut: "/favicon.svg",
