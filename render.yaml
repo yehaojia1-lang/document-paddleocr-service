@@ -3,8 +3,8 @@ services:
     name: document-translation-frontend
     env: docker
     plan: free
-    dockerfilePath: ./Dockerfile.frontend
-    dockerContext: .
+    dockerfilePath: ./Dockerfile
+    dockerContext: ./frontend-service
     envVars:
       - key: OCR_SERVICE_URL
         value: https://document-paddleocr-service.onrender.com
