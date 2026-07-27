@@ -9,3 +9,5 @@ services:
     envVars:
       - key: MAX_PDF_PAGES
         value: "8"
+      - key: OCR_ENGINE
+        value: tesseract

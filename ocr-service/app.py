@@ -1,6 +1,7 @@
 import io
 import os
 import re
+import subprocess
 import tempfile
 import zipfile
 from functools import lru_cache
@@ -11,10 +12,10 @@ import pypdfium2 as pdfium
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from PIL import Image, ImageOps
-from rapidocr_onnxruntime import RapidOCR
 
 
 MAX_PDF_PAGES = int(os.getenv("MAX_PDF_PAGES", "8"))
+OCR_ENGINE = os.getenv("OCR_ENGINE", "tesseract").lower()
 ROTATIONS = (0, 90, 270, 180)
 ID_LABELS = (
     "\u59d3\u540d",
@@ -48,14 +49,14 @@ app.add_middleware(
 
 @app.get("/health")
 def health():
-    return {"ok": True, "engine": "rapidocr"}
+    return {"ok": True, "engine": OCR_ENGINE}
 
 
 @app.get("/")
 def root():
     return {
         "ok": True,
-        "engine": "rapidocr",
+        "engine": OCR_ENGINE,
         "endpoints": {
             "health": "/health",
             "ocr": "POST /ocr",
@@ -92,7 +93,7 @@ async def ocr(
 
     combined = "\n\n".join(f"Page {page['index']}\n{page['text']}" for page in pages).strip()
     return {
-        "engine": "rapidocr",
+        "engine": OCR_ENGINE,
         "text": combined,
         "pages": pages,
         "warning": None if combined else "No reliable text was recognized. Please upload a clearer original file.",
@@ -159,10 +160,22 @@ def recognize_image(image: Image.Image) -> str:
         image.save(temp_path, "JPEG", quality=95)
 
     try:
-        result, _ = get_ocr()(temp_path)
+        if OCR_ENGINE == "rapidocr":
+            try:
+                result, _ = get_ocr()(temp_path)
+                text = rapidocr_text(result)
+                if text.strip():
+                    return text
+            except Exception:
+                pass
+        return tesseract_text(temp_path)
     finally:
         Path(temp_path).unlink(missing_ok=True)
 
+    return ""
+
+
+def rapidocr_text(result) -> str:
     lines = []
     for item in result or []:
         if len(item) >= 3:
@@ -175,7 +188,20 @@ def recognize_image(image: Image.Image) -> str:
 
 @lru_cache(maxsize=1)
 def get_ocr():
+    from rapidocr_onnxruntime import RapidOCR
+
     return RapidOCR()
+
+
+def tesseract_text(image_path: str) -> str:
+    completed = subprocess.run(
+        ["tesseract", image_path, "stdout", "-l", "chi_sim+eng", "--psm", "6"],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=80,
+    )
+    return cleanup_text(completed.stdout)
 
 
 def score_text(text: str, mode: str, doc_type: str) -> int:
