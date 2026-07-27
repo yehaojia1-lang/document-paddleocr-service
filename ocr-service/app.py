@@ -1,8 +1,11 @@
 import io
+import json
 import os
 import re
 import subprocess
 import tempfile
+import urllib.request
+import uuid
 import zipfile
 from pathlib import Path
 from typing import Iterable
@@ -22,7 +25,10 @@ except Exception:
 
 
 MAX_PDF_PAGES = int(os.getenv("MAX_PDF_PAGES", "8"))
-OCR_ENGINE = "rapidocr+tesseract"
+OCR_ENGINE = "ocrspace+tesseract"
+OCR_SPACE_API_KEY = os.getenv("OCR_SPACE_API_KEY", "helloworld")
+OCR_SPACE_ENDPOINT = os.getenv("OCR_SPACE_ENDPOINT", "https://api.ocr.space/parse/image")
+ENABLE_LOCAL_RAPIDOCR = os.getenv("ENABLE_LOCAL_RAPIDOCR", "").lower() in {"1", "true", "yes"}
 MAX_IMAGE_SIDE = int(os.getenv("MAX_IMAGE_SIDE", "2200"))
 MIN_IMAGE_SIDE = int(os.getenv("MIN_IMAGE_SIDE", "1800"))
 ROTATIONS = (0, 90, 270)
@@ -67,7 +73,12 @@ app.add_middleware(
 
 @app.get("/health")
 def health():
-    return {"ok": True, "engine": OCR_ENGINE, "rapidocr": RapidOCR is not None}
+    return {
+        "ok": True,
+        "engine": OCR_ENGINE,
+        "ocrspace": bool(OCR_SPACE_API_KEY),
+        "rapidocr": RapidOCR is not None and ENABLE_LOCAL_RAPIDOCR,
+    }
 
 
 @app.get("/")
@@ -102,10 +113,14 @@ async def ocr(
 
     pages = []
     try:
-        for index, image in enumerate(load_images(data, suffix, mime), start=1):
-            text, rotation, score = recognize_best(image, mode=mode, doc_type=doc_type)
-            if text.strip():
-                pages.append({"index": index, "text": text, "rotation": rotation, "score": score})
+        cloud_text = recognize_ocr_space(data, file.filename or f"upload{suffix or '.png'}", mime, doc_type)
+        if cloud_text:
+            pages.append({"index": 1, "text": postprocess_document_text(cloud_text, mode, doc_type), "rotation": 0, "score": score_text(cloud_text, mode=mode, doc_type=doc_type)})
+        else:
+            for index, image in enumerate(load_images(data, suffix, mime), start=1):
+                text, rotation, score = recognize_best(image, mode=mode, doc_type=doc_type)
+                if text.strip():
+                    pages.append({"index": index, "text": text, "rotation": rotation, "score": score})
     except Exception as exc:
         raise HTTPException(status_code=400, detail=f"OCR failed: {exc}") from exc
 
@@ -116,6 +131,66 @@ async def ocr(
         "pages": pages,
         "warning": None if combined else "No reliable text was recognized. Please upload a clearer original file.",
     }
+
+
+def recognize_ocr_space(data: bytes, filename: str, mime: str, doc_type: str) -> str:
+    if not OCR_SPACE_API_KEY:
+        return ""
+
+    language = "chs" if doc_type == "id-card" else "auto"
+    fields = {
+        "apikey": OCR_SPACE_API_KEY,
+        "language": language,
+        "OCREngine": "3",
+        "scale": "true",
+        "detectOrientation": "true",
+        "isTable": "false",
+    }
+    boundary = f"----codex-ocr-{uuid.uuid4().hex}"
+    body = build_multipart_body(fields, data, filename, mime or "application/octet-stream", boundary)
+    request = urllib.request.Request(
+        OCR_SPACE_ENDPOINT,
+        data=body,
+        headers={
+            "Content-Type": f"multipart/form-data; boundary={boundary}",
+            "Content-Length": str(len(body)),
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=85) as response:
+            payload = json.loads(response.read().decode("utf-8", errors="replace"))
+    except Exception:
+        return ""
+
+    if payload.get("IsErroredOnProcessing"):
+        return ""
+    parsed = payload.get("ParsedResults") or []
+    texts = [item.get("ParsedText", "") for item in parsed if isinstance(item, dict)]
+    return cleanup_text("\n".join(texts))
+
+
+def build_multipart_body(fields: dict[str, str], file_bytes: bytes, filename: str, mime: str, boundary: str) -> bytes:
+    chunks = []
+    for key, value in fields.items():
+        chunks.append(f"--{boundary}\r\n".encode())
+        chunks.append(f'Content-Disposition: form-data; name="{key}"\r\n\r\n'.encode())
+        chunks.append(str(value).encode())
+        chunks.append(b"\r\n")
+    safe_name = Path(filename).name or "upload"
+    chunks.append(f"--{boundary}\r\n".encode())
+    chunks.append(f'Content-Disposition: form-data; name="file"; filename="{safe_name}"\r\n'.encode())
+    chunks.append(f"Content-Type: {mime}\r\n\r\n".encode())
+    chunks.append(file_bytes)
+    chunks.append(b"\r\n")
+    chunks.append(f"--{boundary}--\r\n".encode())
+    return b"".join(chunks)
+
+
+def postprocess_document_text(text: str, mode: str, doc_type: str) -> str:
+    if mode == "id" or doc_type == "id-card":
+        return cleanup_id_text(text)
+    return cleanup_text(text)
 
 
 def load_images(data: bytes, suffix: str, mime: str) -> Iterable[Image.Image]:
@@ -174,7 +249,7 @@ def recognize_best(image: Image.Image, mode: str, doc_type: str):
 
 
 def recognize_page(image: Image.Image, mode: str) -> str:
-    rapid_text = recognize_rapidocr(image)
+    rapid_text = recognize_rapidocr(image) if ENABLE_LOCAL_RAPIDOCR else ""
     tesseract_text_value = recognize_image(image, mode=mode)
     return choose_better_text(rapid_text, tesseract_text_value, mode=mode)
 
@@ -184,7 +259,7 @@ def recognize_id_card(image: Image.Image) -> str:
     fragments = {"full": full_text}
     for name, left, top, right, bottom in ID_FIELD_REGIONS:
         crop = crop_relative(image, left, top, right, bottom)
-        rapid_region = recognize_rapidocr(crop)
+        rapid_region = recognize_rapidocr(crop) if ENABLE_LOCAL_RAPIDOCR else ""
         tesseract_region = recognize_region(crop)
         fragments[name] = choose_better_text(rapid_region, tesseract_region, mode="id")
     structured = build_id_card_text(fragments)
