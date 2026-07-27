@@ -316,6 +316,7 @@ function sendHtml(res) {
       <select id="direction"><option value="zh-to-en">中文翻译成英文</option><option value="en-to-zh">英文/外文翻译成中文</option></select>
       <select id="docType"><option value="id-card">身份证</option><option value="driver-license">驾照</option><option value="graduation-certificate">毕业证</option><option value="degree-certificate">学位证</option><option value="birth-certificate">出生证</option><option value="other">其他文件</option></select>
       <select id="provider"><option value="auto">自动选择模型</option><option value="deepseek">DeepSeek</option><option value="openai">OpenAI</option><option value="offline">离线规则</option></select>
+      <button id="clearBtn" class="secondary" type="button">清空全部</button>
     </div>
     <div class="grid">
       <div>
@@ -352,6 +353,17 @@ function sendHtml(res) {
 let selectedFile = null;
 const $ = (id) => document.getElementById(id);
 function setProgress(n, text) { $("progress").style.width = Math.round(n * 100) + "%"; if (text) $("status").textContent = text; }
+function resetPage() {
+  selectedFile = null;
+  $("file").value = "";
+  $("templateFile").value = "";
+  $("source").value = "";
+  $("templateText").value = "";
+  $("result").textContent = "译文会出现在这里。";
+  $("drop").innerHTML = "<p>选择文件，或把文件拖进这里。电脑也可以点击这里后 Ctrl+V 粘贴截图。</p>";
+  $("templateStatus").textContent = "可上传身份证、出生证、毕业证等 Word 模板，或粘贴你的翻译规则。";
+  setProgress(0, "等待上传文件");
+}
 function showFile(file) {
   selectedFile = file;
   $("drop").innerHTML = "";
@@ -421,6 +433,8 @@ $("translateBtn").addEventListener("click", async () => {
 });
 $("copyOcr").addEventListener("click", () => navigator.clipboard.writeText($("source").value));
 $("copyResult").addEventListener("click", () => navigator.clipboard.writeText($("result").textContent));
+$("clearBtn").addEventListener("click", resetPage);
+window.addEventListener("pageshow", resetPage);
 </script>
 </body>
 </html>`);
