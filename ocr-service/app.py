@@ -16,6 +16,26 @@ from paddleocr import PaddleOCR
 
 MAX_PDF_PAGES = int(os.getenv("MAX_PDF_PAGES", "8"))
 ROTATIONS = (0, 90, 270, 180)
+ID_LABELS = (
+    "\u59d3\u540d",
+    "\u6027\u522b",
+    "\u6c11\u65cf",
+    "\u51fa\u751f",
+    "\u4f4f\u5740",
+    "\u516c\u6c11\u8eab\u4efd\u53f7\u7801",
+    "\u5c45\u6c11\u8eab\u4efd\u8bc1",
+)
+ADDRESS_LABELS = (
+    "\u7701",
+    "\u5e02",
+    "\u533a",
+    "\u53bf",
+    "\u9547",
+    "\u8def",
+    "\u53f7",
+    "\u5ba4",
+    "\u680b",
+)
 
 app = FastAPI(title="Document OCR Service", version="1.0.0")
 app.add_middleware(
@@ -39,7 +59,7 @@ async def ocr(
 ):
     data = await file.read()
     if not data:
-      raise HTTPException(status_code=400, detail="Empty file")
+        raise HTTPException(status_code=400, detail="Empty file")
 
     suffix = Path(file.filename or "").suffix.lower()
     mime = file.content_type or ""
@@ -154,8 +174,8 @@ def score_text(text: str, mode: str, doc_type: str) -> int:
     chinese = len(re.findall(r"[\u4e00-\u9fff]", text))
     digits = len(re.findall(r"\d", text))
     id_number = 60 if re.search(r"\d{17}[\dXx]|\d{15}", text) else 0
-    labels = sum(20 for label in ("姓名", "性别", "民族", "出生", "住址", "公民身份号码", "居民身份证") if label in text)
-    address = sum(5 for label in ("省", "市", "区", "县", "镇", "路", "号", "室", "栋") if label in text)
+    labels = sum(20 for label in ID_LABELS if label in text)
+    address = sum(5 for label in ADDRESS_LABELS if label in text)
     latin_noise = len(re.findall(r"[A-Za-z]{8,}|[|_~`^\\{}[\]<>]", text))
     short_penalty = 35 if len(text) < 8 else 0
     id_bonus = id_number + labels + address if mode == "id" or doc_type == "id-card" else 0
