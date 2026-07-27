@@ -1,2 +1,19 @@
 [functions]
-  included_files = ["netlify/functions/tessdata/**"]
+  external_node_modules = [
+    "tesseract.js",
+    "tesseract.js-core",
+    "regenerator-runtime",
+    "bmp-js",
+    "is-url",
+    "wasm-feature-detect",
+    "zlibjs"
+  ]
+  included_files = [
+    "netlify/functions/tessdata/**",
+    "node_modules/tesseract.js/src/**",
+    "node_modules/regenerator-runtime/**",
+    "node_modules/is-url/**",
+    "node_modules/tesseract.js-core/tesseract-core-lstm.wasm",
+    "node_modules/tesseract.js-core/tesseract-core-lstm.wasm.js"
+  ]
+  node_bundler = "esbuild"

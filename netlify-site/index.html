@@ -21,15 +21,11 @@
       color: var(--ink);
       font-family: Arial, "Microsoft YaHei", sans-serif;
     }
-    main {
-      width: min(1100px, 100%);
-      margin: 0 auto;
-      padding: 18px;
-    }
+    main { width: min(1100px, 100%); margin: 0 auto; padding: 18px; }
     header, section {
       border: 1px solid var(--line);
       border-radius: 10px;
-      background: rgba(255,255,255,.92);
+      background: rgba(255,255,255,.94);
       box-shadow: 0 18px 54px rgba(23,32,27,.08);
     }
     header { padding: 22px; margin-bottom: 14px; }
@@ -37,6 +33,7 @@
     p { color: var(--muted); line-height: 1.65; }
     .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
     section { padding: 16px; }
+    label { display: grid; gap: 8px; color: var(--muted); font-weight: 700; }
     .drop {
       display: grid;
       place-items: center;
@@ -50,7 +47,7 @@
       overflow: hidden;
     }
     .drop.dragging { border-color: var(--accent); box-shadow: inset 0 0 0 4px rgba(23,106,74,.14); }
-    .drop img { max-width: 100%; max-height: 420px; object-fit: contain; }
+    .drop img { max-width: 100%; max-height: 460px; object-fit: contain; }
     .buttons { display: flex; flex-wrap: wrap; gap: 10px; margin: 12px 0; }
     button, select, input::file-selector-button {
       border: 0;
@@ -63,10 +60,12 @@
       font-weight: 800;
     }
     .secondary { background: #eef3ec; color: var(--accent); border: 1px solid var(--line); }
+    button:disabled { opacity: .55; }
     select {
       background: #fff;
       color: var(--ink);
       border: 1px solid var(--line);
+      width: min(100%, 360px);
     }
     input[type=file] { width: 100%; margin: 12px 0; }
     textarea {
@@ -111,7 +110,7 @@
 <main>
   <header>
     <h1>证件 OCR 测试版</h1>
-    <p>请尽量上传“原始证件图片”，不要上传网页截图里的小证件。这个版本默认走云端 OCR：手机只负责上传图片，不再加载大型 wasm 和中文语言包。</p>
+    <p>请上传原始证件图片，手机也可以直接选择文件。这个版本不在手机端裁切字段，而是把图片交给云端自动尝试不同方向和增强方案，减少空白、乱码和横竖方向识别失败。</p>
   </header>
   <div class="grid">
     <section>
@@ -120,17 +119,17 @@
         识别模式
         <select id="mode">
           <option value="full">整图完整识别（推荐）</option>
-          <option value="id">中国身份证字段识别</option>
+          <option value="id">中国身份证优先识别</option>
         </select>
       </label>
       <input id="file" type="file" accept="image/*" />
       <div id="drop" class="drop">把图片拖到这里，或选择文件</div>
-      <div id="paste" class="paste" contenteditable="true">手机可选择文件上传；电脑可点这里后 Ctrl+V 粘贴截图</div>
+      <div id="paste" class="paste" contenteditable="true">手机可选择文件上传；电脑可点击这里后 Ctrl+V 粘贴截图</div>
       <div class="buttons">
         <button id="run" type="button">开始 OCR</button>
         <button id="copy" class="secondary" type="button">复制识别文本</button>
       </div>
-    <p class="hint">提示：如果证件只占照片很小一块，识别会变差。请尽量裁到证件占画面 70% 以上。下方预处理图会显示实际送去 OCR 的图片。</p>
+      <p class="hint">提示：如果证件只占照片很小一块，识别会变差。请尽量裁到证件占画面 70% 以上；如果身份证是横着拍的，现在会自动尝试旋转识别。</p>
       <canvas id="debug"></canvas>
     </section>
     <section>
@@ -153,8 +152,11 @@
   const bar = document.getElementById("bar");
   const debug = document.getElementById("debug");
   const mode = document.getElementById("mode");
+
   let currentFile = null;
   let currentImage = null;
+  let currentObjectUrl = "";
+  let currentDataUrl = "";
 
   function setStatus(text, progress) {
     statusEl.textContent = text;
@@ -168,13 +170,18 @@
   async function setFile(file) {
     if (!file) return;
     currentFile = file;
-    const url = URL.createObjectURL(file);
-    currentImage = await loadImage(url);
+    currentDataUrl = await fileToDataUrl(file);
+    if (currentObjectUrl) URL.revokeObjectURL(currentObjectUrl);
+    currentObjectUrl = URL.createObjectURL(file);
+    currentImage = await loadImage(currentObjectUrl);
+
     drop.innerHTML = "";
     const img = document.createElement("img");
-    img.src = url;
+    img.src = currentObjectUrl;
     img.alt = "上传图片预览";
     drop.appendChild(img);
+
+    drawPreview(currentImage);
     setStatus(`图片已载入 ${currentImage.naturalWidth}×${currentImage.naturalHeight}，可开始 OCR`, 0);
   }
 
@@ -198,23 +205,41 @@
   run.addEventListener("click", recognize);
 
   async function recognize() {
-    if (!currentImage) {
+    if (!currentImage || !currentFile) {
       setStatus("请先上传图片", 0);
       return;
     }
+
+    run.disabled = true;
     textArea.value = "";
     try {
-      if (mode.value === "id") {
-        textArea.value = await recognizeIdCard(currentImage);
-      } else {
-        const canvas = preprocess(currentImage, detectDocumentRegion(currentImage));
-        drawDebug(canvas);
-        textArea.value = isBlankCanvas(canvas) ? await cloudOcrOriginal(currentImage, "6") : await cloudOcr(canvas, "6");
-      }
-      setStatus("识别完成", 1);
+      setStatus("正在准备图片", .08);
+      const images = await imageToUploadVariants(currentImage, currentDataUrl);
+      setStatus("正在上传到云端 OCR，多方向识别中", .22);
+      const result = await cloudOcrDataUrl(images, mode.value);
+      const text = cleanup(result.text || "");
+      textArea.value = text || result.warning || "没有识别到文字，请换更清晰、证件占比更大的原图再试。";
+      const detail = result.rotation !== undefined
+        ? `识别完成：方向 ${result.rotation}°，方案 ${result.variant || "-"}，评分 ${Math.round(result.score || 0)}`
+        : "识别完成";
+      setStatus(detail, 1);
     } catch (error) {
-      setStatus(error.message || "云端 OCR 失败", 0);
+      textArea.value = "";
+      setStatus(error.message || "云端 OCR 失败，请重新上传原图再试", 0);
+    } finally {
+      run.disabled = false;
     }
+  }
+
+  async function cloudOcrDataUrl(images, selectedMode) {
+    const response = await fetch("/.netlify/functions/ocr", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ images, mode: selectedMode })
+    });
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(result.error || "云端 OCR 失败");
+    return result;
   }
 
   function loadImage(url) {
@@ -226,163 +251,74 @@
     });
   }
 
-  async function recognizeIdCard(bitmap) {
-    const region = detectDocumentRegion(bitmap);
-    const cardCanvas = preprocess(bitmap, region);
-    drawDebug(cardCanvas);
-    if (isBlankCanvas(cardCanvas)) {
-      setStatus("预处理为空白，已改用原图整图 OCR", .18);
-      return await cloudOcrOriginal(bitmap, "6");
-    }
-    if (!region.detected) {
-      setStatus("未检测到身份证区域，已改用整图 OCR", .18);
-      return await cloudOcr(cardCanvas, "6");
-    }
-    const regions = [
-      { label: "姓名", x: .12, y: .14, w: .34, h: .10, psm: "7" },
-      { label: "性别/民族", x: .12, y: .27, w: .42, h: .10, psm: "7" },
-      { label: "出生", x: .12, y: .39, w: .50, h: .10, psm: "7" },
-      { label: "住址", x: .12, y: .50, w: .58, h: .23, psm: "6" },
-      { label: "公民身份号码", x: .25, y: .80, w: .62, h: .12, psm: "7" }
-    ];
-    const lines = ["中华人民共和国居民身份证"];
-    for (let i = 0; i < regions.length; i++) {
-      const r = regions[i];
-      setStatus("正在识别 " + r.label, .12 + i * .16);
-      const crop = preprocess(cardCanvas, r, 6);
-      if (isBlankCanvas(crop)) continue;
-      const value = normalizeField(r.label, await cloudOcr(crop, r.psm));
-      if (value) lines.push(r.label === "性别/民族" ? value : `${r.label}：${value}`);
-    }
-    return lines.join("\n");
-  }
-
-  async function cloudOcr(canvas, psm) {
-    setStatus("正在上传预处理图片到云端 OCR", .1);
-    const image = canvasToDataUrl(canvas);
-    const response = await fetch("/.netlify/functions/ocr", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ image, psm })
+  function fileToDataUrl(file) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result || ""));
+      reader.onerror = () => reject(new Error("读取图片失败"));
+      reader.readAsDataURL(file);
     });
-    const result = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(result.error || "云端 OCR 失败");
-    return cleanup(result.text || "");
   }
 
-  async function cloudOcrOriginal(image, psm) {
-    setStatus("预处理为空白，正在上传原图到云端 OCR", .1);
-    const canvas = document.createElement("canvas");
-    const maxSide = 1800;
-    const scale = Math.min(1, maxSide / Math.max(image.naturalWidth || image.width, image.naturalHeight || image.height));
-    canvas.width = Math.round((image.naturalWidth || image.width) * scale);
-    canvas.height = Math.round((image.naturalHeight || image.height) * scale);
-    canvas.getContext("2d").drawImage(image, 0, 0, canvas.width, canvas.height);
-    drawDebug(canvas);
-    return cloudOcr(canvas, psm);
-  }
-
-  function canvasToDataUrl(canvas) {
-    const maxSide = 2200;
-    if (Math.max(canvas.width, canvas.height) <= maxSide) return canvas.toDataURL("image/jpeg", .88);
-    const scale = maxSide / Math.max(canvas.width, canvas.height);
-    const smaller = document.createElement("canvas");
-    smaller.width = Math.round(canvas.width * scale);
-    smaller.height = Math.round(canvas.height * scale);
-    smaller.getContext("2d").drawImage(canvas, 0, 0, smaller.width, smaller.height);
-    return smaller.toDataURL("image/jpeg", .88);
-  }
-
-  function preprocess(bitmap, region, forcedScale) {
-    const sw = Math.round(bitmap.width * region.w);
-    const sh = Math.round(bitmap.height * region.h);
-    const scale = forcedScale || Math.min(7, Math.max(3, 2600 / Math.max(1, sw)));
-    const canvas = document.createElement("canvas");
-    canvas.width = Math.round(sw * scale);
-    canvas.height = Math.round(sh * scale);
-    const ctx = canvas.getContext("2d", { willReadFrequently: true });
-    ctx.imageSmoothingEnabled = true;
-    ctx.drawImage(bitmap, Math.round(bitmap.width * region.x), Math.round(bitmap.height * region.y), sw, sh, 0, 0, canvas.width, canvas.height);
-    const img = ctx.getImageData(0, 0, canvas.width, canvas.height);
-    for (let i = 0; i < img.data.length; i += 4) {
-      const gray = img.data[i] * .3 + img.data[i + 1] * .59 + img.data[i + 2] * .11;
-      const v = gray > 184 ? 255 : Math.max(0, gray - 45);
-      img.data[i] = v; img.data[i + 1] = v; img.data[i + 2] = v;
-    }
-    ctx.putImageData(img, 0, 0);
-    return canvas;
-  }
-
-  function detectDocumentRegion(bitmap) {
-    const w = 720;
-    const scale = Math.min(1, w / bitmap.width);
-    const canvas = document.createElement("canvas");
-    canvas.width = Math.round(bitmap.width * scale);
-    canvas.height = Math.round(bitmap.height * scale);
-    const ctx = canvas.getContext("2d", { willReadFrequently: true });
-    ctx.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
-    const data = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
-    let minX = canvas.width, minY = canvas.height, maxX = 0, maxY = 0, count = 0;
-    for (let y = 0; y < canvas.height; y++) {
-      for (let x = 0; x < canvas.width; x++) {
-        const i = (y * canvas.width + x) * 4;
-        const r = data[i], g = data[i + 1], b = data[i + 2];
-        const blueTexture = b > 110 && g > 85 && b > r + 16 && Math.abs(b - g) < 95;
-        const cyanText = g > 120 && b > 125 && r < 130;
-        if (blueTexture || cyanText) {
-          minX = Math.min(minX, x); minY = Math.min(minY, y);
-          maxX = Math.max(maxX, x); maxY = Math.max(maxY, y);
-          count++;
-        }
+  async function imageToUploadVariants(image, fallbackDataUrl) {
+    const rotations = [0, 90, 270, 180];
+    const variants = [];
+    for (const rotation of rotations) {
+      try {
+        variants.push({ rotation, image: imageToRotatedDataUrl(image, rotation) });
+      } catch {
+        if (rotation === 0 && fallbackDataUrl) variants.push({ rotation: 0, image: fallbackDataUrl });
       }
     }
-    if (count < 120 || maxX <= minX || maxY <= minY) return { x: 0, y: 0, w: 1, h: 1, detected: false };
-    const padX = Math.round((maxX - minX) * .18);
-    const padY = Math.round((maxY - minY) * .22);
-    const left = Math.max(0, minX - padX), top = Math.max(0, minY - padY);
-    const right = Math.min(canvas.width, maxX + padX), bottom = Math.min(canvas.height, maxY + padY);
-    const region = { x: left / canvas.width, y: top / canvas.height, w: (right - left) / canvas.width, h: (bottom - top) / canvas.height, detected: true };
-    if (region.w < .18 || region.h < .12) return { x: 0, y: 0, w: 1, h: 1, detected: false };
-    return region;
+    return variants.length ? variants : [{ rotation: 0, image: fallbackDataUrl }];
   }
 
-  function normalizeField(label, text) {
-    const compact = text.replace(/\s+/g, "");
-    if (!compact) return "";
-    if (label === "性别/民族") {
-      const sex = compact.includes("女") ? "女" : compact.includes("男") ? "男" : "待确认";
-      const ethnicity = compact.includes("汉") ? "汉" : "待确认";
-      return `性别：${sex}\n民族：${ethnicity}`;
-    }
-    if (label === "出生") {
-      const m = compact.match(/(\d{4})\D?(\d{1,2})\D?(\d{1,2})/);
-      return m ? `${m[1]}年${Number(m[2])}月${Number(m[3])}日` : text;
-    }
-    if (label === "公民身份号码") {
-      return compact.match(/\d{15,18}[\dXx]?/)?.[0] || text;
-    }
-    return text;
+  function imageToRotatedDataUrl(image, rotation) {
+    const maxSide = 1700;
+    const width = image.naturalWidth || image.width;
+    const height = image.naturalHeight || image.height;
+    if (!width || !height) throw new Error("图片尺寸为空");
+
+    const scale = Math.min(1, maxSide / Math.max(width, height));
+    const scaledWidth = Math.max(1, Math.round(width * scale));
+    const scaledHeight = Math.max(1, Math.round(height * scale));
+    const sideways = rotation === 90 || rotation === 270;
+    const canvas = document.createElement("canvas");
+    canvas.width = sideways ? scaledHeight : scaledWidth;
+    canvas.height = sideways ? scaledWidth : scaledHeight;
+    const ctx = canvas.getContext("2d");
+    ctx.translate(canvas.width / 2, canvas.height / 2);
+    ctx.rotate(rotation * Math.PI / 180);
+    ctx.drawImage(image, -scaledWidth / 2, -scaledHeight / 2, scaledWidth, scaledHeight);
+    if (rotation === 0) drawDebug(canvas);
+    return canvas.toDataURL("image/jpeg", .86);
   }
 
-  function cleanup(text) {
-    return text.replace(/[|]+/g, " ").split(/\r?\n/).map(line => line.trim()).filter(Boolean).join("\n");
+  function drawPreview(image) {
+    const width = image.naturalWidth || image.width;
+    const height = image.naturalHeight || image.height;
+    const maxSide = 900;
+    const scale = Math.min(1, maxSide / Math.max(width, height));
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.max(1, Math.round(width * scale));
+    canvas.height = Math.max(1, Math.round(height * scale));
+    canvas.getContext("2d").drawImage(image, 0, 0, canvas.width, canvas.height);
+    drawDebug(canvas);
   }
+
   function drawDebug(canvas) {
     debug.width = canvas.width;
     debug.height = canvas.height;
     debug.getContext("2d").drawImage(canvas, 0, 0);
   }
 
-  function isBlankCanvas(canvas) {
-    const ctx = canvas.getContext("2d", { willReadFrequently: true });
-    const width = Math.min(canvas.width, 80);
-    const height = Math.min(canvas.height, 80);
-    const data = ctx.getImageData(0, 0, width, height).data;
-    let nonWhite = 0;
-    for (let i = 0; i < data.length; i += 4) {
-      if (data[i] < 245 || data[i + 1] < 245 || data[i + 2] < 245) nonWhite++;
-    }
-    return nonWhite / (data.length / 4) < .003;
+  function cleanup(text) {
+    return String(text || "")
+      .replace(/[|]+/g, " ")
+      .split(/\r?\n/)
+      .map(line => line.trim())
+      .filter(Boolean)
+      .join("\n");
   }
 </script>
 </body>
