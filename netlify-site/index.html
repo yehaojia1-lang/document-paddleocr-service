@@ -154,7 +154,7 @@
   const debug = document.getElementById("debug");
   const mode = document.getElementById("mode");
   let currentFile = null;
-  let currentBitmap = null;
+  let currentImage = null;
 
   function setStatus(text, progress) {
     statusEl.textContent = text;
@@ -168,13 +168,14 @@
   async function setFile(file) {
     if (!file) return;
     currentFile = file;
-    currentBitmap = await createImageBitmap(file);
+    const url = URL.createObjectURL(file);
+    currentImage = await loadImage(url);
     drop.innerHTML = "";
     const img = document.createElement("img");
-    img.src = URL.createObjectURL(file);
+    img.src = url;
     img.alt = "上传图片预览";
     drop.appendChild(img);
-    setStatus("图片已载入，可开始 OCR", 0);
+    setStatus(`图片已载入 ${currentImage.naturalWidth}×${currentImage.naturalHeight}，可开始 OCR`, 0);
   }
 
   fileInput.addEventListener("change", () => setFile(fileInput.files[0]));
@@ -197,18 +198,18 @@
   run.addEventListener("click", recognize);
 
   async function recognize() {
-    if (!currentBitmap) {
+    if (!currentImage) {
       setStatus("请先上传图片", 0);
       return;
     }
     textArea.value = "";
     try {
       if (mode.value === "id") {
-        textArea.value = await recognizeIdCard(currentBitmap);
+        textArea.value = await recognizeIdCard(currentImage);
       } else {
-        const canvas = preprocess(currentBitmap, detectDocumentRegion(currentBitmap));
+        const canvas = preprocess(currentImage, detectDocumentRegion(currentImage));
         drawDebug(canvas);
-        textArea.value = await cloudOcr(canvas, "6");
+        textArea.value = isBlankCanvas(canvas) ? await cloudOcrOriginal(currentImage, "6") : await cloudOcr(canvas, "6");
       }
       setStatus("识别完成", 1);
     } catch (error) {
@@ -216,10 +217,23 @@
     }
   }
 
+  function loadImage(url) {
+    return new Promise((resolve, reject) => {
+      const img = new Image();
+      img.onload = () => resolve(img);
+      img.onerror = () => reject(new Error("图片解码失败，请换 JPG/PNG 原图"));
+      img.src = url;
+    });
+  }
+
   async function recognizeIdCard(bitmap) {
     const region = detectDocumentRegion(bitmap);
     const cardCanvas = preprocess(bitmap, region);
     drawDebug(cardCanvas);
+    if (isBlankCanvas(cardCanvas)) {
+      setStatus("预处理为空白，已改用原图整图 OCR", .18);
+      return await cloudOcrOriginal(bitmap, "6");
+    }
     if (!region.detected) {
       setStatus("未检测到身份证区域，已改用整图 OCR", .18);
       return await cloudOcr(cardCanvas, "6");
@@ -236,6 +250,7 @@
       const r = regions[i];
       setStatus("正在识别 " + r.label, .12 + i * .16);
       const crop = preprocess(cardCanvas, r, 6);
+      if (isBlankCanvas(crop)) continue;
       const value = normalizeField(r.label, await cloudOcr(crop, r.psm));
       if (value) lines.push(r.label === "性别/民族" ? value : `${r.label}：${value}`);
     }
@@ -253,6 +268,18 @@
     const result = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(result.error || "云端 OCR 失败");
     return cleanup(result.text || "");
+  }
+
+  async function cloudOcrOriginal(image, psm) {
+    setStatus("预处理为空白，正在上传原图到云端 OCR", .1);
+    const canvas = document.createElement("canvas");
+    const maxSide = 1800;
+    const scale = Math.min(1, maxSide / Math.max(image.naturalWidth || image.width, image.naturalHeight || image.height));
+    canvas.width = Math.round((image.naturalWidth || image.width) * scale);
+    canvas.height = Math.round((image.naturalHeight || image.height) * scale);
+    canvas.getContext("2d").drawImage(image, 0, 0, canvas.width, canvas.height);
+    drawDebug(canvas);
+    return cloudOcr(canvas, psm);
   }
 
   function canvasToDataUrl(canvas) {
@@ -344,6 +371,18 @@
     debug.width = canvas.width;
     debug.height = canvas.height;
     debug.getContext("2d").drawImage(canvas, 0, 0);
+  }
+
+  function isBlankCanvas(canvas) {
+    const ctx = canvas.getContext("2d", { willReadFrequently: true });
+    const width = Math.min(canvas.width, 80);
+    const height = Math.min(canvas.height, 80);
+    const data = ctx.getImageData(0, 0, width, height).data;
+    let nonWhite = 0;
+    for (let i = 0; i < data.length; i += 4) {
+      if (data[i] < 245 || data[i + 1] < 245 || data[i + 2] < 245) nonWhite++;
+    }
+    return nonWhite / (data.length / 4) < .003;
   }
 </script>
 </body>
