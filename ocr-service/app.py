@@ -119,9 +119,12 @@ async def ocr(
     try:
         cloud_pages = []
         if suffix == ".pdf" or mime == "application/pdf":
-            cloud_pages = extract_pdf_text_pages(data)
-            if not cloud_pages:
+            if GOOGLE_VISION_API_KEY:
                 cloud_pages = recognize_pdf_pages_cloud(data, doc_type)
+            else:
+                cloud_pages = extract_pdf_text_pages(data)
+                if not cloud_pages:
+                    cloud_pages = recognize_pdf_pages_cloud(data, doc_type)
         else:
             cloud_text = recognize_cloud_image(data, file.filename or f"upload{suffix or '.png'}", mime, doc_type)
             if is_reliable_text(cloud_text, mode=mode, doc_type=doc_type):
@@ -133,7 +136,7 @@ async def ocr(
         else:
             for index, image in enumerate(load_images(data, suffix, mime), start=1):
                 text, rotation, score = recognize_best(image, mode=mode, doc_type=doc_type)
-                if text.strip():
+                if is_reliable_text(text, mode=mode, doc_type=doc_type):
                     pages.append({"index": index, "text": text, "rotation": rotation, "score": score})
     except Exception as exc:
         raise HTTPException(status_code=400, detail=f"OCR failed: {exc}") from exc
@@ -699,6 +702,8 @@ def is_reliable_text(text: str, mode: str, doc_type: str) -> bool:
     symbol_noise = len(re.findall(r"[~`^_{}<>\\|]", text))
     useful = chinese + digits + sum(len(word) for word in latin_words)
 
+    if chinese < 6 and (long_noise >= 2 or symbol_noise > 4):
+        return False
     if re.search(r"\d{17}[\dXx]|\d{15}", text):
         return True
     if any(label in text for label in ID_LABELS) and chinese + digits >= 6:
