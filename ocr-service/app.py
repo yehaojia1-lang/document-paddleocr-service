@@ -121,7 +121,7 @@ def ocr(
     try:
         cloud_pages = []
         if suffix == ".pdf" or mime == "application/pdf":
-            if GOOGLE_VISION_API_KEY:
+            if cloud_provider_order():
                 cloud_pages = recognize_pdf_pages_cloud(data, doc_type)
             else:
                 cloud_pages = extract_pdf_text_pages(data)
@@ -251,7 +251,7 @@ def recognize_google_vision(data: bytes) -> str:
 def image_to_jpeg_bytes(image: Image.Image) -> bytes:
     buffer = io.BytesIO()
     image = normalize_image_size(ImageOps.exif_transpose(image).convert("RGB"))
-    image.save(buffer, "JPEG", quality=92, optimize=True)
+    image.save(buffer, "JPEG", quality=84, optimize=True)
     return buffer.getvalue()
 
 

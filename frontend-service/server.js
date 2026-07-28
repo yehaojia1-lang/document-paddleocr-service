@@ -801,7 +801,7 @@ async function ocrUploadFormWithRetry(form) {
     }
     setProgress(Math.min(0.95, Number($("progress").style.width.replace("%", "")) / 100 || 0), "OCR 正在自动重试第 " + (attempt + 1) + " 次");
   }
-  return { error: lastError + "。已重试 2 次；请确认 Google Vision API 已启用，或单独截图该页再试。" };
+  return { error: lastError + "。已重试 2 次；请确认当前 OCR 服务 API Key 已配置，文件未超出服务限制，或单独截图该页再试。" };
 }
 $("file").addEventListener("change", e => showFiles(e.target.files));
 $("drop").addEventListener("click", () => $("file").click());
