@@ -66,41 +66,50 @@ async function translate(req, res) {
   const payload = JSON.parse((await readBody(req)).toString("utf8") || "{}");
   const text = typeof payload.text === "string" ? payload.text.trim() : "";
   const direction = payload.direction === "en-to-zh" ? "en-to-zh" : "zh-to-en";
-  const provider = payload.provider === "openai" || payload.provider === "deepseek" || payload.provider === "offline" ? payload.provider : "auto";
+  const provider = payload.provider === "openai" || payload.provider === "deepseek" || payload.provider === "custom" || payload.provider === "offline" ? payload.provider : "auto";
   const docType = typeof payload.docType === "string" ? payload.docType : "other";
   const templateText = typeof payload.templateText === "string" ? cleanTemplateText(payload.templateText).slice(0, TEMPLATE_TEXT_LIMIT) : "";
+  const modelConfig = {
+    apiKey: typeof payload.apiKey === "string" ? payload.apiKey.trim() : "",
+    baseUrl: typeof payload.baseUrl === "string" ? payload.baseUrl.trim() : "",
+    model: typeof payload.model === "string" ? payload.model.trim() : "",
+  };
 
   if (!text) return sendJson(res, 400, { error: "No OCR text was provided." });
 
   const providers = provider === "auto" ? ["deepseek", "openai"] : [provider];
   for (const name of providers) {
-    const result = await callModel(name, text, direction, docType, templateText).catch((error) => ({
+    const result = await callModel(name, text, direction, docType, templateText, modelConfig).catch((error) => ({
       error: error instanceof Error ? error.message : "Model request failed",
     }));
     if (result && !result.error) return sendJson(res, 200, result);
   }
 
-  if (provider === "deepseek" || provider === "openai") {
+  if (provider === "deepseek" || provider === "openai" || provider === "custom") {
     return sendJson(res, 200, modelUnavailable(provider, direction));
   }
 
   sendJson(res, 200, offlineTranslate(text, direction));
 }
 
-async function callModel(provider, text, direction, docType, templateText) {
+async function callModel(provider, text, direction, docType, templateText, modelConfig = {}) {
   if (provider === "offline") return null;
   const isDeepSeek = provider === "deepseek";
-  const key = isDeepSeek ? process.env.DEEPSEEK_API_KEY : process.env.OPENAI_API_KEY;
+  const isCustom = provider === "custom";
+  const key = modelConfig.apiKey || (isDeepSeek ? process.env.DEEPSEEK_API_KEY : process.env.OPENAI_API_KEY);
   if (!key) return null;
+  const model = modelConfig.model || (isDeepSeek ? process.env.DEEPSEEK_MODEL || "deepseek-chat" : process.env.OPENAI_MODEL || "gpt-4.1-mini");
+  const baseUrl = modelConfig.baseUrl || (isDeepSeek ? "https://api.deepseek.com" : "https://api.openai.com/v1");
+  const endpoint = normalizeChatCompletionsUrl(baseUrl, isCustom ? "custom" : provider);
 
-  const response = await fetch(isDeepSeek ? "https://api.deepseek.com/chat/completions" : "https://api.openai.com/v1/chat/completions", {
+  const response = await fetch(endpoint, {
     method: "POST",
     headers: {
       authorization: `Bearer ${key}`,
       "content-type": "application/json",
     },
     body: JSON.stringify({
-      model: isDeepSeek ? process.env.DEEPSEEK_MODEL || "deepseek-chat" : process.env.OPENAI_MODEL || "gpt-4.1-mini",
+      model,
       temperature: 0.05,
       response_format: { type: "json_object" },
       messages: [
@@ -124,6 +133,13 @@ ${text}`,
   const content = data?.choices?.[0]?.message?.content;
   if (typeof content !== "string") throw new Error("Model returned no content");
   return normalizeModelResult(JSON.parse(content), provider);
+}
+
+function normalizeChatCompletionsUrl(baseUrl, provider) {
+  const value = String(baseUrl || "").trim().replace(/\/+$/, "");
+  if (!value) return provider === "deepseek" ? "https://api.deepseek.com/chat/completions" : "https://api.openai.com/v1/chat/completions";
+  if (/\/chat\/completions$/i.test(value)) return value;
+  return `${value}/chat/completions`;
 }
 
 function buildSystemPrompt(templateText) {
@@ -160,11 +176,11 @@ function normalizeModelResult(value, provider) {
 function modelUnavailable(provider, direction) {
   return {
     mode: "model unavailable",
-    title: provider === "deepseek" ? "DeepSeek 未接通" : "OpenAI 未接通",
+    title: provider === "deepseek" ? "DeepSeek 未接通" : provider === "openai" ? "OpenAI 未接通" : "自定义 API 未接通",
     summary: `当前选择了 ${provider}，但服务端没有可用密钥，或模型调用失败，所以没有生成专业译文。`,
     fields: [],
-    polished: direction === "zh-to-en" ? "Model unavailable. Please configure the API key and redeploy." : "模型不可用。请配置 API 密钥并重新部署。",
-    notes: ["如果刚刚添加了 API key，请在 Render 里重新部署前端服务。"],
+    polished: direction === "zh-to-en" ? "Model unavailable. Please check the API settings on this page." : "模型不可用。请检查本页 API 设置。",
+    notes: ["可以在页面的 API 设置里填写 API Key、Base URL 和模型名。"],
   };
 }
 
@@ -293,6 +309,7 @@ function sendHtml(res) {
     select, button, textarea, input { font:inherit; }
     select, textarea { border:1px solid var(--line); border-radius:6px; background:#fff; }
     select { padding:10px 12px; }
+    input[type="password"], input[type="text"], input[type="url"] { min-height:44px; border-radius:6px; border:1px solid var(--line); background:#fff; color:var(--text); padding:0 12px; width:100%; }
     button { border:0; border-radius:6px; padding:11px 16px; background:var(--green); color:#fff; font-weight:700; cursor:pointer; }
     button.secondary { background:#edf4ef; color:var(--green); border:1px solid var(--line); }
     button:disabled { opacity:.55; cursor:not-allowed; }
@@ -306,7 +323,10 @@ function sendHtml(res) {
     .bar span { display:block; height:100%; width:0; background:linear-gradient(90deg, var(--green), var(--gold)); transition:width .25s; }
     .result { white-space:pre-wrap; min-height:280px; border:1px solid var(--line); border-radius:6px; padding:14px; background:#fbfcfa; line-height:1.6; }
     .tiny { font-size:13px; color:var(--muted); }
+    .api-grid { display:grid; grid-template-columns:1.2fr 1.2fr 1fr; gap:10px; margin-top:10px; }
+    .api-actions { display:flex; gap:10px; flex-wrap:wrap; margin-top:10px; }
     @media (max-width: 820px) { .grid { grid-template-columns:1fr; } h1 { font-size:25px; } }
+    @media (max-width: 820px) { .api-grid { grid-template-columns:1fr; } }
   </style>
 </head>
 <body>
@@ -320,9 +340,19 @@ function sendHtml(res) {
     <div class="controls">
       <select id="direction"><option value="zh-to-en">中文翻译成英文</option><option value="en-to-zh">英文/外文翻译成中文</option></select>
       <select id="docType"><option value="id-card">身份证</option><option value="driver-license">驾照</option><option value="graduation-certificate">毕业证</option><option value="degree-certificate">学位证</option><option value="birth-certificate">出生证</option><option value="other">其他文件</option></select>
-      <select id="provider"><option value="auto">自动选择模型</option><option value="deepseek">DeepSeek</option><option value="openai">OpenAI</option><option value="offline">离线规则</option></select>
+      <select id="provider"><option value="auto">自动选择模型</option><option value="deepseek">DeepSeek</option><option value="openai">OpenAI</option><option value="custom">自定义 API</option><option value="offline">离线规则</option></select>
       <button id="clearBtn" class="secondary" type="button">清空全部</button>
     </div>
+    <details>
+      <summary><strong>API 设置</strong></summary>
+      <div class="api-grid">
+        <label>API Key<input id="apiKey" type="password" autocomplete="off" placeholder="sk-..." /></label>
+        <label>Base URL<input id="apiBaseUrl" type="url" placeholder="https://api.deepseek.com 或 https://api.openai.com/v1" /></label>
+        <label>模型名<input id="apiModel" type="text" placeholder="deepseek-chat / gpt-4.1-mini" /></label>
+      </div>
+      <div class="api-actions"><button id="saveApi" type="button">保存 API 设置</button><button id="clearApi" class="secondary" type="button">清除 API 设置</button></div>
+      <p id="apiStatus" class="tiny">填写后会优先使用这里的模型设置；不填写则使用后台默认 DeepSeek。</p>
+    </details>
     <div class="grid">
       <div>
         <h2>上传待翻译文件</h2>
@@ -360,10 +390,40 @@ function sendHtml(res) {
 let selectedFiles = [];
 const $ = (id) => document.getElementById(id);
 const NL = String.fromCharCode(10);
+const API_STORAGE_KEY = "documentTranslationApiSettings";
 if (window.pdfjsLib) {
   pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
 }
 function setProgress(n, text) { $("progress").style.width = Math.round(n * 100) + "%"; if (text) $("status").textContent = text; }
+function loadApiSettings() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(API_STORAGE_KEY) || "{}");
+    if (saved.provider) $("provider").value = saved.provider;
+    $("apiKey").value = saved.apiKey || "";
+    $("apiBaseUrl").value = saved.baseUrl || "";
+    $("apiModel").value = saved.model || "";
+    $("apiStatus").textContent = saved.apiKey ? "已加载本机保存的 API 设置。" : "填写后会优先使用这里的模型设置；不填写则使用后台默认 DeepSeek。";
+  } catch {
+    $("apiStatus").textContent = "API 设置读取失败，可以重新填写后保存。";
+  }
+}
+function saveApiSettings() {
+  const settings = {
+    provider: $("provider").value,
+    apiKey: $("apiKey").value.trim(),
+    baseUrl: $("apiBaseUrl").value.trim(),
+    model: $("apiModel").value.trim(),
+  };
+  localStorage.setItem(API_STORAGE_KEY, JSON.stringify(settings));
+  $("apiStatus").textContent = "API 设置已保存到当前浏览器。";
+}
+function clearApiSettings() {
+  localStorage.removeItem(API_STORAGE_KEY);
+  $("apiKey").value = "";
+  $("apiBaseUrl").value = "";
+  $("apiModel").value = "";
+  $("apiStatus").textContent = "API 设置已清除。";
+}
 function resetPage() {
   selectedFiles = [];
   $("file").value = "";
@@ -539,7 +599,10 @@ $("translateBtn").addEventListener("click", async () => {
       templateText:$("templateText").value,
       direction:$("direction").value,
       docType:$("docType").value,
-      provider:$("provider").value
+      provider:$("provider").value,
+      apiKey:$("apiKey").value.trim(),
+      baseUrl:$("apiBaseUrl").value.trim(),
+      model:$("apiModel").value.trim()
     })
   });
   const data = await res.json();
@@ -552,7 +615,10 @@ $("translateBtn").addEventListener("click", async () => {
 });
 $("copyOcr").addEventListener("click", () => navigator.clipboard.writeText($("source").value));
 $("copyResult").addEventListener("click", () => navigator.clipboard.writeText($("result").textContent));
+$("saveApi").addEventListener("click", saveApiSettings);
+$("clearApi").addEventListener("click", clearApiSettings);
 $("clearBtn").addEventListener("click", resetPage);
+loadApiSettings();
 window.addEventListener("pageshow", resetPage);
 </script>
 </body>
