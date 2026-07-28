@@ -24,14 +24,16 @@ except Exception:
         RapidOCR = None
 
 
-MAX_PDF_PAGES = int(os.getenv("MAX_PDF_PAGES", "2"))
+MAX_PDF_PAGES = int(os.getenv("MAX_PDF_PAGES", "10"))
 OCR_ENGINE = "ocrspace+tesseract"
-OCR_SPACE_API_KEY = os.getenv("OCR_SPACE_API_KEY", "helloworld")
+OCR_SPACE_API_KEY = os.getenv("OCR_SPACE_API_KEY", "")
 OCR_SPACE_ENDPOINT = os.getenv("OCR_SPACE_ENDPOINT", "https://api.ocr.space/parse/image")
+GOOGLE_VISION_API_KEY = os.getenv("GOOGLE_VISION_API_KEY", "")
+GOOGLE_VISION_ENDPOINT = os.getenv("GOOGLE_VISION_ENDPOINT", "https://vision.googleapis.com/v1/images:annotate")
 ENABLE_LOCAL_RAPIDOCR = os.getenv("ENABLE_LOCAL_RAPIDOCR", "").lower() in {"1", "true", "yes"}
-MAX_IMAGE_SIDE = int(os.getenv("MAX_IMAGE_SIDE", "2200"))
+MAX_IMAGE_SIDE = int(os.getenv("MAX_IMAGE_SIDE", "3200"))
 MIN_IMAGE_SIDE = int(os.getenv("MIN_IMAGE_SIDE", "1800"))
-PDF_RENDER_SCALE = float(os.getenv("PDF_RENDER_SCALE", "1.35"))
+PDF_RENDER_SCALE = float(os.getenv("PDF_RENDER_SCALE", "2.4"))
 ROTATIONS = (0, 90, 270)
 PSM_MODES = ("6", "11")
 RAPID_OCR = None
@@ -77,6 +79,7 @@ def health():
     return {
         "ok": True,
         "engine": OCR_ENGINE,
+        "googleVision": bool(GOOGLE_VISION_API_KEY),
         "ocrspace": bool(OCR_SPACE_API_KEY),
         "rapidocr": RapidOCR is not None and ENABLE_LOCAL_RAPIDOCR,
     }
@@ -114,15 +117,19 @@ async def ocr(
 
     pages = []
     try:
-        cloud_text = ""
+        cloud_pages = []
         if suffix == ".pdf" or mime == "application/pdf":
-            cloud_text = extract_pdf_text(data)
-            if not cloud_text:
-                cloud_text = recognize_pdf_pages_cloud(data, doc_type)
+            cloud_pages = extract_pdf_text_pages(data)
+            if not cloud_pages:
+                cloud_pages = recognize_pdf_pages_cloud(data, doc_type)
         else:
-            cloud_text = recognize_ocr_space(data, file.filename or f"upload{suffix or '.png'}", mime, doc_type)
-        if cloud_text:
-            pages.append({"index": 1, "text": postprocess_document_text(cloud_text, mode, doc_type), "rotation": 0, "score": score_text(cloud_text, mode=mode, doc_type=doc_type)})
+            cloud_text = recognize_cloud_image(data, file.filename or f"upload{suffix or '.png'}", mime, doc_type)
+            if is_reliable_text(cloud_text, mode=mode, doc_type=doc_type):
+                cloud_pages = [(1, cloud_text)]
+        if cloud_pages:
+            for page_index, cloud_text in cloud_pages:
+                text = postprocess_document_text(cloud_text, mode, doc_type)
+                pages.append({"index": page_index, "text": text, "rotation": 0, "score": score_text(text, mode=mode, doc_type=doc_type)})
         else:
             for index, image in enumerate(load_images(data, suffix, mime), start=1):
                 text, rotation, score = recognize_best(image, mode=mode, doc_type=doc_type)
@@ -141,38 +148,89 @@ async def ocr(
 
 
 def extract_pdf_text(data: bytes) -> str:
+    pages = extract_pdf_text_pages(data)
+    return cleanup_text("\n\n".join(text for _, text in pages))
+
+
+def extract_pdf_text_pages(data: bytes) -> list[tuple[int, str]]:
     try:
         document = pdfium.PdfDocument(data)
-        texts = []
+        pages = []
         for page_index in range(min(len(document), MAX_PDF_PAGES)):
             page = document[page_index]
             textpage = page.get_textpage()
             text = textpage.get_text_range()
-            if text and text.strip():
-                texts.append(text)
-        return cleanup_text("\n\n".join(texts))
+            text = cleanup_text(text or "")
+            if is_reliable_text(text, mode="full", doc_type=""):
+                pages.append((page_index + 1, text))
+        return pages
     except Exception:
-        return ""
+        return []
 
 
-def recognize_pdf_pages_cloud(data: bytes, doc_type: str) -> str:
-    texts = []
+def recognize_pdf_pages_cloud(data: bytes, doc_type: str) -> list[tuple[int, str]]:
+    pages = []
     try:
         for index, image in enumerate(render_pdf_pages(data), start=1):
-            with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as temp:
-                temp_path = temp.name
-                image = normalize_image_size(ImageOps.exif_transpose(image).convert("RGB"))
-                image.save(temp_path, "JPEG", quality=88, optimize=True)
-            try:
-                image_data = Path(temp_path).read_bytes()
-                text = recognize_ocr_space(image_data, f"page-{index}.jpg", "image/jpeg", doc_type)
-                if text:
-                    texts.append(f"Page {index}\n{text}")
-            finally:
-                Path(temp_path).unlink(missing_ok=True)
+            image_data = image_to_jpeg_bytes(image)
+            text = recognize_cloud_image(image_data, f"page-{index}.jpg", "image/jpeg", doc_type)
+            if is_reliable_text(text, mode="full", doc_type=doc_type):
+                pages.append((index, text))
+    except Exception:
+        return []
+    return pages
+
+
+def recognize_cloud_image(data: bytes, filename: str, mime: str, doc_type: str) -> str:
+    if GOOGLE_VISION_API_KEY:
+        text = recognize_google_vision(data)
+        if is_reliable_text(text, mode="full", doc_type=doc_type):
+            return text
+    text = recognize_ocr_space(data, filename, mime, doc_type)
+    if is_reliable_text(text, mode="full", doc_type=doc_type):
+        return text
+    return ""
+
+
+def image_to_jpeg_bytes(image: Image.Image) -> bytes:
+    buffer = io.BytesIO()
+    image = normalize_image_size(ImageOps.exif_transpose(image).convert("RGB"))
+    image.save(buffer, "JPEG", quality=92, optimize=True)
+    return buffer.getvalue()
+
+
+def recognize_google_vision(data: bytes) -> str:
+    if not GOOGLE_VISION_API_KEY:
+        return ""
+
+    import base64
+
+    payload = {
+        "requests": [
+            {
+                "image": {"content": base64.b64encode(data).decode("ascii")},
+                "features": [{"type": "DOCUMENT_TEXT_DETECTION"}],
+                "imageContext": {"languageHints": ["zh", "zh-Hans", "en", "it"]},
+            }
+        ]
+    }
+    request = urllib.request.Request(
+        f"{GOOGLE_VISION_ENDPOINT}?key={GOOGLE_VISION_API_KEY}",
+        data=json.dumps(payload).encode("utf-8"),
+        headers={"Content-Type": "application/json; charset=utf-8"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=55) as response:
+            result = json.loads(response.read().decode("utf-8", errors="replace"))
     except Exception:
         return ""
-    return cleanup_text("\n\n".join(texts))
+
+    responses = result.get("responses") or []
+    if not responses or responses[0].get("error"):
+        return ""
+    annotation = responses[0].get("fullTextAnnotation") or {}
+    return cleanup_text(annotation.get("text") or "")
 
 
 def recognize_ocr_space(data: bytes, filename: str, mime: str, doc_type: str) -> str:
@@ -627,6 +685,29 @@ def score_text(text: str, mode: str, doc_type: str) -> int:
     short_penalty = 35 if len(text) < 8 else 0
     id_bonus = id_number + labels + address if mode == "id" or doc_type == "id-card" else 0
     return chinese * 2 + min(digits, 35) + id_bonus - latin_noise * 8 - short_penalty
+
+
+def is_reliable_text(text: str, mode: str, doc_type: str) -> bool:
+    text = cleanup_text(text)
+    if len(text) < 4:
+        return False
+
+    chinese = len(re.findall(r"[\u4e00-\u9fff]", text))
+    digits = len(re.findall(r"\d", text))
+    latin_words = re.findall(r"[A-Za-z]{3,}", text)
+    long_noise = len(re.findall(r"[A-Za-z]{8,}|[~`^_{}<>\\|]{2,}|(?:[A-Za-z][~`^_{}<>\\|]){2,}", text))
+    symbol_noise = len(re.findall(r"[~`^_{}<>\\|]", text))
+    useful = chinese + digits + sum(len(word) for word in latin_words)
+
+    if re.search(r"\d{17}[\dXx]|\d{15}", text):
+        return True
+    if any(label in text for label in ID_LABELS) and chinese + digits >= 6:
+        return True
+    if chinese >= 8 or digits >= 8:
+        return True
+    if latin_words and useful >= 18 and long_noise <= 1 and symbol_noise <= 3:
+        return True
+    return False
 
 
 def cleanup_text(text: str) -> str:

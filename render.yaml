@@ -22,10 +22,12 @@ services:
     healthCheckPath: /health
     envVars:
       - key: MAX_PDF_PAGES
-        value: "2"
+        value: "10"
       - key: MAX_IMAGE_SIDE
-        value: "2200"
+        value: "3200"
       - key: MIN_IMAGE_SIDE
         value: "1800"
       - key: PDF_RENDER_SCALE
-        value: "1.35"
+        value: "2.4"
+      - key: GOOGLE_VISION_API_KEY
+        sync: false
