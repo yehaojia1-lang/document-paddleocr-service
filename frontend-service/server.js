@@ -419,6 +419,37 @@ async function makePdfUploadFile(file) {
   const imageName = (file.name || "document.pdf").replace(/\\.pdf$/i, "") + "-page-1.jpg";
   return { uploadFile: new File([blob], imageName, { type: "image/jpeg" }), text: "" };
 }
+async function loadPdf(file) {
+  if (!window.pdfjsLib) throw new Error("PDF reader is not loaded");
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  return await pdfjsLib.getDocument({ data: bytes }).promise;
+}
+async function extractPdfPageText(page) {
+  const textContent = await page.getTextContent();
+  return textContent.items.map(item => item.str || "").join(" ").replace(/\s+/g, " ").trim();
+}
+async function renderPdfPageToImageFile(file, page, pageNumber) {
+  const viewport = page.getViewport({ scale: 2 });
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.floor(viewport.width);
+  canvas.height = Math.floor(viewport.height);
+  const context = canvas.getContext("2d", { alpha: false });
+  context.fillStyle = "#fff";
+  context.fillRect(0, 0, canvas.width, canvas.height);
+  await page.render({ canvasContext: context, viewport }).promise;
+  const blob = await new Promise(resolve => canvas.toBlob(resolve, "image/jpeg", 0.9));
+  if (!blob) throw new Error("PDF page render failed");
+  const baseName = (file.name || "document.pdf").replace(/\\.pdf$/i, "");
+  return new File([blob], baseName + "-page-" + pageNumber + ".jpg", { type: "image/jpeg" });
+}
+async function ocrUploadFile(uploadFile) {
+  const form = new FormData();
+  form.set("file", uploadFile, uploadFile.name || "upload");
+  form.set("mode", $("docType").value === "id-card" ? "id" : "full");
+  form.set("doc_type", $("docType").value);
+  const res = await fetch("/api/ocr", { method:"POST", body: form });
+  return await res.json();
+}
 $("file").addEventListener("change", e => showFiles(e.target.files));
 $("drop").addEventListener("click", () => $("file").click());
 $("drop").addEventListener("dragover", e => { e.preventDefault(); $("drop").classList.add("drag"); });
@@ -462,28 +493,32 @@ $("ocrBtn").addEventListener("click", async () => {
     for (let i = 0; i < selectedFiles.length; i++) {
       const selectedFile = selectedFiles[i];
       const isPdf = selectedFile.name && selectedFile.name.toLowerCase().endsWith(".pdf");
-      let uploadFile = selectedFile;
-      setProgress(i / selectedFiles.length, "正在识别第 " + (i + 1) + " / " + selectedFiles.length + " 个文件");
-      if (isPdf) {
+      if (isPdf && window.pdfjsLib) {
         try {
-          const prepared = await makePdfUploadFile(selectedFile);
-          if (prepared.text) {
-            results.push(pageBlock(i, selectedFile.name, stripFirstPagePrefix(prepared.text)));
+          const pdf = await loadPdf(selectedFile);
+          for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber++) {
+            setProgress(0.05 + 0.9 * ((pageNumber - 1) / Math.max(1, pdf.numPages)), "正在识别 PDF 第 " + pageNumber + " / " + pdf.numPages + " 页");
+            const page = await pdf.getPage(pageNumber);
+            const pageName = selectedFile.name + " 第" + pageNumber + "页";
+            const text = await extractPdfPageText(page);
+            if (text.length >= 20) {
+              results.push(pageBlock(results.length, pageName, text));
+            } else {
+              const pageFile = await renderPdfPageToImageFile(selectedFile, page, pageNumber);
+              const data = await ocrUploadFile(pageFile);
+              results.push(pageBlock(results.length, pageName, data.text || data.warning || data.error || "没有识别到文字"));
+            }
             $("source").value = results.join(NL + NL);
-            continue;
           }
-          uploadFile = prepared.uploadFile;
+          continue;
         } catch (err) {
-          console.warn("PDF browser pre-processing failed; falling back to server OCR", err);
+          console.warn("PDF all-page processing failed; falling back to server OCR", err);
         }
       }
-      const form = new FormData();
-      form.set("file", uploadFile, uploadFile.name || "upload");
-      form.set("mode", $("docType").value === "id-card" ? "id" : "full");
-      form.set("doc_type", $("docType").value);
-      const res = await fetch("/api/ocr", { method:"POST", body: form });
-      const data = await res.json();
-      results.push(pageBlock(i, selectedFile.name, data.text || data.warning || data.error || "没有识别到文字"));
+
+      setProgress(i / selectedFiles.length, "正在识别第 " + (i + 1) + " / " + selectedFiles.length + " 个文件");
+      const data = await ocrUploadFile(selectedFile);
+      results.push(pageBlock(results.length, selectedFile.name, data.text || data.warning || data.error || "没有识别到文字"));
       $("source").value = results.join(NL + NL);
       setProgress((i + 1) / selectedFiles.length, "已完成 " + (i + 1) + " / " + selectedFiles.length + " 个文件");
     }
