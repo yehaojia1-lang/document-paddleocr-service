@@ -268,7 +268,10 @@ function sendEmpty(res, status) {
 }
 
 function sendHtml(res) {
-  res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+  res.writeHead(200, {
+    "content-type": "text/html; charset=utf-8",
+    "cache-control": "no-store",
+  });
   res.end(`<!doctype html>
 <html lang="zh-CN">
 <head>
@@ -356,6 +359,7 @@ function sendHtml(res) {
 <script>
 let selectedFiles = [];
 const $ = (id) => document.getElementById(id);
+const NL = String.fromCharCode(10);
 if (window.pdfjsLib) {
   pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
 }
@@ -383,6 +387,13 @@ function showFiles(files) {
     $("drop").innerHTML = "<p>等待上传文件</p>";
   }
   setProgress(0, selectedFiles.length ? "已选择 " + selectedFiles.length + " 个文件" : "等待上传文件");
+}
+function stripFirstPagePrefix(text) {
+  const prefix = "Page 1" + NL;
+  return text.startsWith(prefix) ? text.slice(prefix.length) : text;
+}
+function pageBlock(index, fileName, text) {
+  return "Page " + (index + 1) + " - " + fileName + NL + text;
 }
 async function makePdfUploadFile(file) {
   if (!window.pdfjsLib) return { uploadFile: file, text: "" };
@@ -457,8 +468,8 @@ $("ocrBtn").addEventListener("click", async () => {
         try {
           const prepared = await makePdfUploadFile(selectedFile);
           if (prepared.text) {
-            results.push("Page " + (i + 1) + " - " + selectedFile.name + "\n" + prepared.text.replace(/^Page 1\n/, ""));
-            $("source").value = results.join("\n\n");
+            results.push(pageBlock(i, selectedFile.name, stripFirstPagePrefix(prepared.text)));
+            $("source").value = results.join(NL + NL);
             continue;
           }
           uploadFile = prepared.uploadFile;
@@ -472,8 +483,8 @@ $("ocrBtn").addEventListener("click", async () => {
       form.set("doc_type", $("docType").value);
       const res = await fetch("/api/ocr", { method:"POST", body: form });
       const data = await res.json();
-      results.push("Page " + (i + 1) + " - " + selectedFile.name + "\n" + (data.text || data.warning || data.error || "没有识别到文字"));
-      $("source").value = results.join("\n\n");
+      results.push(pageBlock(i, selectedFile.name, data.text || data.warning || data.error || "没有识别到文字"));
+      $("source").value = results.join(NL + NL);
       setProgress((i + 1) / selectedFiles.length, "已完成 " + (i + 1) + " / " + selectedFiles.length + " 个文件");
     }
     setProgress(1, "识别完成，请校对后翻译");
