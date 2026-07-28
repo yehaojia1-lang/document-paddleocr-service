@@ -604,7 +604,7 @@ async function extractPdfPageText(page) {
   return textContent.items.map(item => item.str || "").join(" ").replace(/\s+/g, " ").trim();
 }
 async function renderPdfPageToImageFile(file, page, pageNumber) {
-  const viewport = page.getViewport({ scale: 2 });
+  const viewport = page.getViewport({ scale: 1.55 });
   const canvas = document.createElement("canvas");
   canvas.width = Math.floor(viewport.width);
   canvas.height = Math.floor(viewport.height);
@@ -612,7 +612,7 @@ async function renderPdfPageToImageFile(file, page, pageNumber) {
   context.fillStyle = "#fff";
   context.fillRect(0, 0, canvas.width, canvas.height);
   await page.render({ canvasContext: context, viewport }).promise;
-  const blob = await new Promise(resolve => canvas.toBlob(resolve, "image/jpeg", 0.9));
+  const blob = await new Promise(resolve => canvas.toBlob(resolve, "image/jpeg", 0.86));
   if (!blob) throw new Error("PDF page render failed");
   const baseName = (file.name || "document.pdf").replace(/\\.pdf$/i, "");
   return new File([blob], baseName + "-page-" + pageNumber + ".jpg", { type: "image/jpeg" });
@@ -622,16 +622,34 @@ async function ocrUploadFile(uploadFile) {
   form.set("file", uploadFile, uploadFile.name || "upload");
   form.set("mode", $("docType").value === "id-card" ? "id" : "full");
   form.set("doc_type", $("docType").value);
+  return await ocrUploadFormWithRetry(form);
+}
+async function fetchWithTimeout(url, options, timeoutMs) {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 120000);
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const res = await fetch("/api/ocr", { method:"POST", body: form, signal: controller.signal });
-    return await res.json();
-  } catch (error) {
-    return { error: error.name === "AbortError" ? "该页 OCR 超时，已跳过。可单独截图该页再试。" : "OCR 请求失败：" + (error.message || error) };
+    return await fetch(url, { ...options, signal: controller.signal });
   } finally {
     clearTimeout(timer);
   }
+}
+async function ocrUploadFormWithRetry(form) {
+  const endpoints = ["/api/ocr", "https://document-paddleocr-service.onrender.com/ocr"];
+  let lastError = "";
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    for (const endpoint of endpoints) {
+      try {
+        const res = await fetchWithTimeout(endpoint, { method:"POST", body: form }, 240000);
+        const data = await res.json();
+        if (res.ok && data && (data.text || data.warning)) return data;
+        lastError = data?.error || data?.detail || res.statusText || "OCR 没有返回文本";
+      } catch (error) {
+        lastError = error.name === "AbortError" ? "OCR 等待超时" : ("OCR 请求失败：" + (error.message || error));
+      }
+    }
+    setProgress(Math.min(0.95, Number($("progress").style.width.replace("%", "")) / 100 || 0), "OCR 正在自动重试第 " + (attempt + 1) + " 次");
+  }
+  return { error: lastError + "。已重试 3 次；建议单独截图该页再试。" };
 }
 $("file").addEventListener("change", e => showFiles(e.target.files));
 $("drop").addEventListener("click", () => $("file").click());
