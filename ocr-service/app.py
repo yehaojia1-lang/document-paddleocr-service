@@ -24,13 +24,14 @@ except Exception:
         RapidOCR = None
 
 
-MAX_PDF_PAGES = int(os.getenv("MAX_PDF_PAGES", "8"))
+MAX_PDF_PAGES = int(os.getenv("MAX_PDF_PAGES", "2"))
 OCR_ENGINE = "ocrspace+tesseract"
 OCR_SPACE_API_KEY = os.getenv("OCR_SPACE_API_KEY", "helloworld")
 OCR_SPACE_ENDPOINT = os.getenv("OCR_SPACE_ENDPOINT", "https://api.ocr.space/parse/image")
 ENABLE_LOCAL_RAPIDOCR = os.getenv("ENABLE_LOCAL_RAPIDOCR", "").lower() in {"1", "true", "yes"}
 MAX_IMAGE_SIDE = int(os.getenv("MAX_IMAGE_SIDE", "2200"))
 MIN_IMAGE_SIDE = int(os.getenv("MIN_IMAGE_SIDE", "1800"))
+PDF_RENDER_SCALE = float(os.getenv("PDF_RENDER_SCALE", "1.35"))
 ROTATIONS = (0, 90, 270)
 PSM_MODES = ("6", "11")
 RAPID_OCR = None
@@ -113,7 +114,13 @@ async def ocr(
 
     pages = []
     try:
-        cloud_text = recognize_ocr_space(data, file.filename or f"upload{suffix or '.png'}", mime, doc_type)
+        cloud_text = ""
+        if suffix == ".pdf" or mime == "application/pdf":
+            cloud_text = extract_pdf_text(data)
+            if not cloud_text:
+                cloud_text = recognize_pdf_pages_cloud(data, doc_type)
+        else:
+            cloud_text = recognize_ocr_space(data, file.filename or f"upload{suffix or '.png'}", mime, doc_type)
         if cloud_text:
             pages.append({"index": 1, "text": postprocess_document_text(cloud_text, mode, doc_type), "rotation": 0, "score": score_text(cloud_text, mode=mode, doc_type=doc_type)})
         else:
@@ -131,6 +138,41 @@ async def ocr(
         "pages": pages,
         "warning": None if combined else "No reliable text was recognized. Please upload a clearer original file.",
     }
+
+
+def extract_pdf_text(data: bytes) -> str:
+    try:
+        document = pdfium.PdfDocument(data)
+        texts = []
+        for page_index in range(min(len(document), MAX_PDF_PAGES)):
+            page = document[page_index]
+            textpage = page.get_textpage()
+            text = textpage.get_text_range()
+            if text and text.strip():
+                texts.append(text)
+        return cleanup_text("\n\n".join(texts))
+    except Exception:
+        return ""
+
+
+def recognize_pdf_pages_cloud(data: bytes, doc_type: str) -> str:
+    texts = []
+    try:
+        for index, image in enumerate(render_pdf_pages(data), start=1):
+            with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as temp:
+                temp_path = temp.name
+                image = normalize_image_size(ImageOps.exif_transpose(image).convert("RGB"))
+                image.save(temp_path, "JPEG", quality=88, optimize=True)
+            try:
+                image_data = Path(temp_path).read_bytes()
+                text = recognize_ocr_space(image_data, f"page-{index}.jpg", "image/jpeg", doc_type)
+                if text:
+                    texts.append(f"Page {index}\n{text}")
+            finally:
+                Path(temp_path).unlink(missing_ok=True)
+    except Exception:
+        return ""
+    return cleanup_text("\n\n".join(texts))
 
 
 def recognize_ocr_space(data: bytes, filename: str, mime: str, doc_type: str) -> str:
@@ -210,7 +252,7 @@ def render_pdf_pages(data: bytes) -> Iterable[Image.Image]:
     page_count = min(len(document), MAX_PDF_PAGES)
     for page_index in range(page_count):
         page = document[page_index]
-        bitmap = page.render(scale=1.8)
+        bitmap = page.render(scale=PDF_RENDER_SCALE)
         yield bitmap.to_pil()
 
 

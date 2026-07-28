@@ -18,8 +18,10 @@ services:
     healthCheckPath: /health
     envVars:
       - key: MAX_PDF_PAGES
-        value: "8"
+        value: "2"
       - key: MAX_IMAGE_SIDE
         value: "2200"
       - key: MIN_IMAGE_SIDE
         value: "1800"
+      - key: PDF_RENDER_SCALE
+        value: "1.35"

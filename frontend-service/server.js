@@ -398,12 +398,14 @@ $("templateFile").addEventListener("change", async e => {
 });
 $("ocrBtn").addEventListener("click", async () => {
   if (!selectedFile) return alert("请先选择文件");
-  setProgress(.15, "正在上传到 OCR 服务");
+  const isPdf = selectedFile.name && selectedFile.name.toLowerCase().endsWith(".pdf");
+  setProgress(.15, isPdf ? "正在处理 PDF：优先抽文字，必要时识别前 2 页" : "正在上传到 OCR 服务");
   const form = new FormData();
   form.set("file", selectedFile, selectedFile.name || "upload");
   form.set("mode", $("docType").value === "id-card" ? "id" : "full");
   form.set("doc_type", $("docType").value);
   const res = await fetch("/api/ocr", { method:"POST", body: form });
+  setProgress(.75, isPdf ? "PDF 正在识别，请稍等" : "OCR 正在识别，请稍等");
   const data = await res.json();
   $("source").value = data.text || "";
   setProgress(1, data.text ? "识别完成，请校对后翻译" : (data.warning || data.error || "没有识别到文字"));
