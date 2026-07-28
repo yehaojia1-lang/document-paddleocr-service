@@ -294,6 +294,8 @@ function sendHtml(res) {
     button.secondary { background:#edf4ef; color:var(--green); border:1px solid var(--line); }
     button:disabled { opacity:.55; cursor:not-allowed; }
     .drop { min-height:240px; border:2px dashed #a9b8b0; border-radius:8px; display:grid; place-items:center; text-align:center; padding:14px; background:#fbfcfa; overflow:hidden; }
+    .template-drop { min-height:92px; border:2px dashed #a9b8b0; border-radius:8px; display:grid; place-items:center; text-align:center; padding:12px; background:#fbfcfa; color:var(--muted); cursor:pointer; }
+    .template-drop.drag { border-color:var(--green); background:#edf7f0; color:var(--text); }
     .drop.drag { border-color:var(--green); background:#edf7f0; }
     .drop img { max-width:100%; max-height:330px; display:block; border-radius:4px; }
     textarea { width:100%; min-height:240px; padding:14px; resize:vertical; line-height:1.6; }
@@ -329,6 +331,7 @@ function sendHtml(res) {
       <div>
         <h2>上传参考模板 / 规则</h2>
         <input id="templateFile" type="file" accept=".docx,.txt,.md" />
+        <div id="templateDrop" class="template-drop" tabindex="0"><p>选择模板文件，或把 Word / TXT / MD 规则文件拖到这里。</p></div>
         <textarea id="templateText" placeholder="模板文字会出现在这里；也可以直接粘贴翻译规范、术语表或示例译文。"></textarea>
         <p id="templateStatus" class="tiny">可上传身份证、出生证、毕业证等 Word 模板，或粘贴你的翻译规则。</p>
       </div>
@@ -365,6 +368,7 @@ function resetPage() {
   $("templateText").value = "";
   $("result").textContent = "译文会出现在这里。";
   $("drop").innerHTML = "<p>选择文件，或把文件拖进这里。电脑也可以点击这里后 Ctrl+V 粘贴截图。</p>";
+  $("templateDrop").innerHTML = "<p>选择模板文件，或把 Word / TXT / MD 规则文件拖到这里。</p>";
   $("templateStatus").textContent = "可上传身份证、出生证、毕业证等 Word 模板，或粘贴你的翻译规则。";
   setProgress(0, "等待上传文件");
 }
@@ -409,9 +413,9 @@ $("drop").addEventListener("dragleave", () => $("drop").classList.remove("drag")
 $("drop").addEventListener("drop", e => { e.preventDefault(); $("drop").classList.remove("drag"); showFile(e.dataTransfer.files[0]); });
 $("drop").addEventListener("paste", e => { const file = [...e.clipboardData.files][0]; if (file) showFile(file); });
 document.addEventListener("paste", e => { const file = [...e.clipboardData.files][0]; if (file) showFile(file); });
-$("templateFile").addEventListener("change", async e => {
-  const file = e.target.files[0];
+async function readTemplateFile(file) {
   if (!file) return;
+  $("templateDrop").innerHTML = "<p>" + file.name + "</p>";
   $("templateStatus").textContent = "正在读取模板：" + file.name;
   const form = new FormData();
   form.set("file", file, file.name);
@@ -423,6 +427,18 @@ $("templateFile").addEventListener("change", async e => {
   }
   $("templateText").value = data.text || "";
   $("templateStatus").textContent = "已读取模板：" + file.name + "（" + (data.chars || 0) + " 字）";
+}
+$("templateFile").addEventListener("change", e => readTemplateFile(e.target.files[0]));
+$("templateDrop").addEventListener("click", () => $("templateFile").click());
+$("templateDrop").addEventListener("dragover", e => { e.preventDefault(); $("templateDrop").classList.add("drag"); });
+$("templateDrop").addEventListener("dragleave", () => $("templateDrop").classList.remove("drag"));
+$("templateDrop").addEventListener("drop", e => { e.preventDefault(); $("templateDrop").classList.remove("drag"); readTemplateFile(e.dataTransfer.files[0]); });
+$("templateDrop").addEventListener("paste", e => {
+  const file = [...e.clipboardData.files][0];
+  if (!file) return;
+  e.preventDefault();
+  e.stopPropagation();
+  readTemplateFile(file);
 });
 $("ocrBtn").addEventListener("click", async () => {
   if (!selectedFile) return alert("请先选择文件");
