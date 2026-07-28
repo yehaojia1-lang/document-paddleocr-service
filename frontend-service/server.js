@@ -349,9 +349,13 @@ function sendHtml(res) {
     </div>
   </section>
 </main>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
 <script>
 let selectedFile = null;
 const $ = (id) => document.getElementById(id);
+if (window.pdfjsLib) {
+  pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+}
 function setProgress(n, text) { $("progress").style.width = Math.round(n * 100) + "%"; if (text) $("status").textContent = text; }
 function resetPage() {
   selectedFile = null;
@@ -373,6 +377,30 @@ function showFile(file) {
     $("drop").innerHTML = "<p>" + (file ? file.name : "等待上传文件") + "</p>";
   }
   setProgress(0, file ? "已选择文件：" + file.name : "等待上传文件");
+}
+async function makePdfUploadFile(file) {
+  if (!window.pdfjsLib) return { uploadFile: file, text: "" };
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  const pdf = await pdfjsLib.getDocument({ data: bytes }).promise;
+  const page = await pdf.getPage(1);
+  const textContent = await page.getTextContent();
+  const text = textContent.items.map(item => item.str || "").join(" ").replace(/\s+/g, " ").trim();
+  if (text.length >= 20) {
+    return { uploadFile: file, text: "Page 1\\n" + text };
+  }
+
+  const viewport = page.getViewport({ scale: 2 });
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.floor(viewport.width);
+  canvas.height = Math.floor(viewport.height);
+  const context = canvas.getContext("2d", { alpha: false });
+  context.fillStyle = "#fff";
+  context.fillRect(0, 0, canvas.width, canvas.height);
+  await page.render({ canvasContext: context, viewport }).promise;
+  const blob = await new Promise(resolve => canvas.toBlob(resolve, "image/jpeg", 0.9));
+  if (!blob) return { uploadFile: file, text: "" };
+  const imageName = (file.name || "document.pdf").replace(/\\.pdf$/i, "") + "-page-1.jpg";
+  return { uploadFile: new File([blob], imageName, { type: "image/jpeg" }), text: "" };
 }
 $("file").addEventListener("change", e => showFile(e.target.files[0]));
 $("drop").addEventListener("click", () => $("file").click());
@@ -399,13 +427,29 @@ $("templateFile").addEventListener("change", async e => {
 $("ocrBtn").addEventListener("click", async () => {
   if (!selectedFile) return alert("请先选择文件");
   const isPdf = selectedFile.name && selectedFile.name.toLowerCase().endsWith(".pdf");
-  setProgress(.15, isPdf ? "正在处理 PDF：优先抽文字，必要时识别前 2 页" : "正在上传到 OCR 服务");
+  let uploadFile = selectedFile;
+  setProgress(.12, isPdf ? "PDF 正在本地预处理第一页" : "正在上传到 OCR 服务");
+  if (isPdf) {
+    try {
+      const prepared = await makePdfUploadFile(selectedFile);
+      if (prepared.text) {
+        $("source").value = prepared.text;
+        setProgress(1, "已直接读取 PDF 文字层，请校对后翻译");
+        return;
+      }
+      uploadFile = prepared.uploadFile;
+      setProgress(.32, "PDF 已转为图片，正在上传 OCR");
+    } catch (err) {
+      console.warn("PDF browser pre-processing failed; falling back to server OCR", err);
+      setProgress(.25, "PDF 本地预处理失败，改用服务器识别");
+    }
+  }
   const form = new FormData();
-  form.set("file", selectedFile, selectedFile.name || "upload");
+  form.set("file", uploadFile, uploadFile.name || "upload");
   form.set("mode", $("docType").value === "id-card" ? "id" : "full");
   form.set("doc_type", $("docType").value);
   const res = await fetch("/api/ocr", { method:"POST", body: form });
-  setProgress(.75, isPdf ? "PDF 正在识别，请稍等" : "OCR 正在识别，请稍等");
+  setProgress(.75, isPdf ? "PDF 页面正在 OCR 识别，请稍等" : "OCR 正在识别，请稍等");
   const data = await res.json();
   $("source").value = data.text || "";
   setProgress(1, data.text ? "识别完成，请校对后翻译" : (data.warning || data.error || "没有识别到文字"));
