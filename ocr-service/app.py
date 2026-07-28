@@ -224,7 +224,7 @@ def recognize_google_vision(data: bytes) -> str:
         method="POST",
     )
     try:
-        with urllib.request.urlopen(request, timeout=55) as response:
+        with urllib.request.urlopen(request, timeout=25) as response:
             result = json.loads(response.read().decode("utf-8", errors="replace"))
     except Exception:
         return ""

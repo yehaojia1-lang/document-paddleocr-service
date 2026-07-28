@@ -734,7 +734,7 @@ async function extractPdfPageText(page) {
   return textContent.items.map(item => item.str || "").join(" ").replace(/\s+/g, " ").trim();
 }
 async function renderPdfPageToImageFile(file, page, pageNumber) {
-  const viewport = page.getViewport({ scale: 1.55 });
+  const viewport = page.getViewport({ scale: 2.35 });
   const canvas = document.createElement("canvas");
   canvas.width = Math.floor(viewport.width);
   canvas.height = Math.floor(viewport.height);
@@ -742,7 +742,7 @@ async function renderPdfPageToImageFile(file, page, pageNumber) {
   context.fillStyle = "#fff";
   context.fillRect(0, 0, canvas.width, canvas.height);
   await page.render({ canvasContext: context, viewport }).promise;
-  const blob = await new Promise(resolve => canvas.toBlob(resolve, "image/jpeg", 0.86));
+  const blob = await new Promise(resolve => canvas.toBlob(resolve, "image/jpeg", 0.92));
   if (!blob) throw new Error("PDF page render failed");
   const baseName = (file.name || "document.pdf").replace(/\\.pdf$/i, "");
   return new File([blob], baseName + "-page-" + pageNumber + ".jpg", { type: "image/jpeg" });
@@ -769,7 +769,7 @@ async function ocrUploadFormWithRetry(form) {
   for (let attempt = 1; attempt <= 3; attempt++) {
     for (const endpoint of endpoints) {
       try {
-        const res = await fetchWithTimeout(endpoint, { method:"POST", body: form }, 240000);
+        const res = await fetchWithTimeout(endpoint, { method:"POST", body: form }, 90000);
         const data = await res.json();
         if (res.ok && data && (data.text || data.warning)) return data;
         lastError = data?.error || data?.detail || res.statusText || "OCR 没有返回文本";
@@ -842,14 +842,9 @@ $("ocrBtn").addEventListener("click", async () => {
             setProgress(0.05 + 0.9 * ((pageNumber - 1) / Math.max(1, pdf.numPages)), "正在识别 PDF 第 " + pageNumber + " / " + pdf.numPages + " 页");
             const page = await pdf.getPage(pageNumber);
             const pageName = selectedFile.name + " 第" + pageNumber + "页";
-            const text = await extractPdfPageText(page);
-            if (text.length >= 20) {
-              results.push(pageBlock(results.length, pageName, text));
-            } else {
-              const pageFile = await renderPdfPageToImageFile(selectedFile, page, pageNumber);
-              const data = await ocrUploadFile(pageFile);
-              results.push(pageBlock(results.length, pageName, data.text || data.warning || data.error || "没有识别到文字"));
-            }
+            const pageFile = await renderPdfPageToImageFile(selectedFile, page, pageNumber);
+            const data = await ocrUploadFile(pageFile);
+            results.push(pageBlock(results.length, pageName, data.text || data.warning || data.error || "No text was recognized."));
             $("source").value = results.join(NL + NL);
           }
           continue;
