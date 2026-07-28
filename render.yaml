@@ -8,6 +8,10 @@ services:
     envVars:
       - key: OCR_SERVICE_URL
         value: https://document-paddleocr-service.onrender.com
+      - key: SUPABASE_URL
+        value: https://hcariewwelyiahivevwj.supabase.co
+      - key: SUPABASE_SECRET_KEY
+        sync: false
 
   - type: web
     name: document-paddleocr-service

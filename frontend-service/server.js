@@ -3,6 +3,8 @@ const mammoth = require("mammoth");
 
 const PORT = Number(process.env.PORT || 3000);
 const OCR_SERVICE_URL = (process.env.OCR_SERVICE_URL || "https://document-paddleocr-service.onrender.com").replace(/\/+$/, "");
+const SUPABASE_URL = (process.env.SUPABASE_URL || "").replace(/\/+$/, "");
+const SUPABASE_SECRET_KEY = process.env.SUPABASE_SECRET_KEY || "";
 const TEMPLATE_TEXT_LIMIT = 14000;
 
 const server = http.createServer(async (req, res) => {
@@ -16,10 +18,14 @@ const server = http.createServer(async (req, res) => {
         ocrService: OCR_SERVICE_URL,
         deepseek: Boolean(process.env.DEEPSEEK_API_KEY),
         openai: Boolean(process.env.OPENAI_API_KEY),
+        supabase: Boolean(SUPABASE_URL && SUPABASE_SECRET_KEY),
       });
     }
     if (req.method === "POST" && url.pathname === "/api/ocr") return proxyOcr(req, res);
     if (req.method === "POST" && url.pathname === "/api/template") return extractTemplate(req, res);
+    if (req.method === "GET" && url.pathname === "/api/template-library") return listTemplateLibrary(req, res);
+    if (req.method === "POST" && url.pathname === "/api/template-library") return saveTemplateLibrary(req, res);
+    if (req.method === "DELETE" && url.pathname === "/api/template-library") return deleteTemplateLibrary(req, res);
     if (req.method === "POST" && url.pathname === "/api/translate") return translate(req, res);
     sendText(res, 404, "Not found");
   } catch (error) {
@@ -60,6 +66,85 @@ async function extractTemplate(req, res) {
 
   text = cleanTemplateText(text).slice(0, TEMPLATE_TEXT_LIMIT);
   sendJson(res, 200, { filename: file.filename, text, chars: text.length });
+}
+
+function supabaseHeaders(extra = {}) {
+  return {
+    apikey: SUPABASE_SECRET_KEY,
+    authorization: `Bearer ${SUPABASE_SECRET_KEY}`,
+    "content-type": "application/json",
+    ...extra,
+  };
+}
+
+function ensureSupabase(res) {
+  if (SUPABASE_URL && SUPABASE_SECRET_KEY) return true;
+  sendJson(res, 503, { error: "Supabase is not configured on the server." });
+  return false;
+}
+
+async function listTemplateLibrary(req, res) {
+  if (!ensureSupabase(res)) return;
+  const response = await fetch(`${SUPABASE_URL}/rest/v1/template_rules?select=id,doc_type,name,text,source,created_at,updated_at&order=updated_at.desc`, {
+    headers: supabaseHeaders(),
+  });
+  const data = await response.json().catch(() => []);
+  if (!response.ok) return sendJson(res, response.status, { error: data?.message || "Failed to load cloud template library." });
+  sendJson(res, 200, { items: Array.isArray(data) ? data.map(fromSupabaseTemplate) : [] });
+}
+
+async function saveTemplateLibrary(req, res) {
+  if (!ensureSupabase(res)) return;
+  const payload = JSON.parse((await readBody(req)).toString("utf8") || "{}");
+  const name = String(payload.name || "Untitled template").trim().slice(0, 200);
+  const docType = String(payload.docType || "other").trim().slice(0, 80);
+  const text = cleanTemplateText(String(payload.text || "")).slice(0, TEMPLATE_TEXT_LIMIT);
+  if (!text) return sendJson(res, 400, { error: "Template text is empty." });
+  const body = {
+    doc_type: docType,
+    name,
+    text,
+    source: "document-translation-web",
+    updated_at: new Date().toISOString(),
+  };
+  const id = typeof payload.id === "string" && payload.id ? payload.id : "";
+  const endpoint = id ? `${SUPABASE_URL}/rest/v1/template_rules?id=eq.${encodeURIComponent(id)}` : `${SUPABASE_URL}/rest/v1/template_rules`;
+  const response = await fetch(endpoint, {
+    method: id ? "PATCH" : "POST",
+    headers: supabaseHeaders({ prefer: "return=representation" }),
+    body: JSON.stringify(body),
+  });
+  const data = await response.json().catch(() => []);
+  if (!response.ok) return sendJson(res, response.status, { error: data?.message || "Failed to save cloud template." });
+  const row = Array.isArray(data) ? data[0] : data;
+  sendJson(res, 200, { item: fromSupabaseTemplate(row) });
+}
+
+async function deleteTemplateLibrary(req, res) {
+  if (!ensureSupabase(res)) return;
+  const url = new URL(req.url || "/", "http://localhost");
+  const id = url.searchParams.get("id") || "";
+  if (!id) return sendJson(res, 400, { error: "Missing template id." });
+  const response = await fetch(`${SUPABASE_URL}/rest/v1/template_rules?id=eq.${encodeURIComponent(id)}`, {
+    method: "DELETE",
+    headers: supabaseHeaders(),
+  });
+  if (!response.ok) {
+    const data = await response.json().catch(() => ({}));
+    return sendJson(res, response.status, { error: data?.message || "Failed to delete cloud template." });
+  }
+  sendJson(res, 200, { ok: true });
+}
+
+function fromSupabaseTemplate(row) {
+  return {
+    id: String(row?.id || ""),
+    name: String(row?.name || "Untitled template"),
+    docType: String(row?.doc_type || "other"),
+    text: String(row?.text || ""),
+    savedAt: String(row?.updated_at || row?.created_at || ""),
+    source: String(row?.source || "cloud"),
+  };
 }
 
 async function translate(req, res) {
@@ -468,6 +553,39 @@ function readTemplateLibrary() {
 function writeTemplateLibrary(items) {
   localStorage.setItem(TEMPLATE_STORAGE_KEY, JSON.stringify(items));
 }
+async function refreshTemplateLibraryFromCloud() {
+  try {
+    const res = await fetch("/api/template-library");
+    if (!res.ok) return false;
+    const data = await res.json();
+    if (!Array.isArray(data.items)) return false;
+    writeTemplateLibrary(data.items);
+    applyTemplateMemoryByDocType();
+    $("templateStatus").textContent = "已从云端模板库加载 " + data.items.length + " 条规则。";
+    return true;
+  } catch {
+    return false;
+  }
+}
+async function saveTemplateToCloud(entry) {
+  try {
+    const res = await fetch("/api/template-library", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(entry),
+    });
+    if (!res.ok) return null;
+    const data = await res.json();
+    return data.item || null;
+  } catch {
+    return null;
+  }
+}
+async function deleteTemplateFromCloud(id) {
+  try {
+    await fetch("/api/template-library?id=" + encodeURIComponent(id), { method: "DELETE" });
+  } catch {}
+}
 function renderTemplateLibrary(selectedId = "") {
   const items = readTemplateLibrary();
   const list = $("templateMemoryList");
@@ -520,6 +638,17 @@ function saveTemplateMemory(name = "手动保存的模板规则", forcedText = "
   applyTemplateMemoryByDocType();
   $("templateMemoryList").value = entry.id;
   $("templateStatus").textContent = "已保存到模板库：[" + docTypeLabel(docType) + "] " + name + "（" + text.length + " 字）。";
+  saveTemplateToCloud(entry).then(cloudEntry => {
+    if (!cloudEntry) return;
+    const latest = readTemplateLibrary();
+    const index = latest.findIndex(item => item.id === entry.id || (item.name === entry.name && item.docType === entry.docType));
+    if (index >= 0) latest[index] = cloudEntry;
+    else latest.unshift(cloudEntry);
+    writeTemplateLibrary(latest);
+    renderTemplateLibrary(cloudEntry.id);
+    $("templateMemoryList").value = cloudEntry.id;
+    $("templateStatus").textContent = "已同步到云端模板库：[" + docTypeLabel(cloudEntry.docType) + "] " + cloudEntry.name + "。";
+  });
 }
 function deleteSelectedTemplateMemory() {
   const selectedId = $("templateMemoryList").value;
@@ -530,6 +659,7 @@ function deleteSelectedTemplateMemory() {
   const items = readTemplateLibrary();
   const target = items.find(item => item.id === selectedId);
   writeTemplateLibrary(items.filter(item => item.id !== selectedId));
+  deleteTemplateFromCloud(selectedId);
   applyTemplateMemoryByDocType();
   $("templateStatus").textContent = "已删除选中模板：" + (target ? target.name : selectedId) + "。其他模板仍然保留。";
 }
@@ -774,6 +904,7 @@ $("clearTemplateMemory").addEventListener("click", deleteSelectedTemplateMemory)
 $("clearBtn").addEventListener("click", resetPage);
 loadApiSettings();
 loadTemplateMemory();
+refreshTemplateLibraryFromCloud();
 window.addEventListener("pageshow", resetPage);
 </script>
 </body>
