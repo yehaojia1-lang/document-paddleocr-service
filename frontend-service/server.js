@@ -365,6 +365,7 @@ function sendHtml(res) {
         <h2>上传参考模板 / 规则</h2>
         <input id="templateFile" type="file" accept=".docx,.txt,.md" />
         <div id="templateDrop" class="template-drop" tabindex="0"><p>选择模板文件，或把 Word / TXT / MD 规则文件拖到这里。</p></div>
+        <div class="controls"><button id="saveTemplateMemory" type="button">保存模板记忆</button><button id="clearTemplateMemory" class="secondary" type="button">清除模板记忆</button></div>
         <textarea id="templateText" placeholder="模板文字会出现在这里；也可以直接粘贴翻译规范、术语表或示例译文。"></textarea>
         <p id="templateStatus" class="tiny">可上传身份证、出生证、毕业证等 Word 模板，或粘贴你的翻译规则。</p>
       </div>
@@ -391,6 +392,7 @@ let selectedFiles = [];
 const $ = (id) => document.getElementById(id);
 const NL = String.fromCharCode(10);
 const API_STORAGE_KEY = "documentTranslationApiSettings";
+const TEMPLATE_STORAGE_KEY = "documentTranslationTemplateMemory";
 if (window.pdfjsLib) {
   pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
 }
@@ -424,16 +426,48 @@ function clearApiSettings() {
   $("apiModel").value = "";
   $("apiStatus").textContent = "API 设置已清除。";
 }
+function showEmptyTemplateMemory() {
+  $("templateDrop").innerHTML = "<p>选择模板文件，或把 Word / TXT / MD 规则文件拖到这里。</p>";
+  $("templateStatus").textContent = "可上传身份证、出生证、毕业证等 Word 模板，或粘贴你的翻译规则。";
+}
+function loadTemplateMemory() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(TEMPLATE_STORAGE_KEY) || "{}");
+    if (!saved.text) {
+      showEmptyTemplateMemory();
+      return;
+    }
+    $("templateText").value = saved.text;
+    $("templateStatus").textContent = "已加载模板记忆：" + (saved.name || "已保存规则") + "（" + saved.text.length + " 字）";
+    $("templateDrop").innerHTML = "<p>" + (saved.name || "已保存模板记忆") + "</p>";
+  } catch {
+    $("templateStatus").textContent = "模板记忆读取失败，可以重新上传模板后保存。";
+  }
+}
+function saveTemplateMemory(name = "手动保存的模板规则") {
+  const text = $("templateText").value.trim();
+  if (!text) {
+    $("templateStatus").textContent = "模板框为空，不能保存。";
+    return;
+  }
+  localStorage.setItem(TEMPLATE_STORAGE_KEY, JSON.stringify({ name, text, savedAt: new Date().toISOString() }));
+  $("templateStatus").textContent = "模板记忆已保存：" + name + "（" + text.length + " 字）";
+  $("templateDrop").innerHTML = "<p>" + name + "</p>";
+}
+function clearTemplateMemory() {
+  localStorage.removeItem(TEMPLATE_STORAGE_KEY);
+  $("templateText").value = "";
+  showEmptyTemplateMemory();
+  $("templateStatus").textContent = "模板记忆已清除。";
+}
 function resetPage() {
   selectedFiles = [];
   $("file").value = "";
   $("templateFile").value = "";
   $("source").value = "";
-  $("templateText").value = "";
   $("result").textContent = "译文会出现在这里。";
   $("drop").innerHTML = "<p>选择文件，或把文件拖进这里。电脑也可以点击这里后 Ctrl+V 粘贴截图。</p>";
-  $("templateDrop").innerHTML = "<p>选择模板文件，或把 Word / TXT / MD 规则文件拖到这里。</p>";
-  $("templateStatus").textContent = "可上传身份证、出生证、毕业证等 Word 模板，或粘贴你的翻译规则。";
+  loadTemplateMemory();
   setProgress(0, "等待上传文件");
 }
 function showFiles(files) {
@@ -531,6 +565,7 @@ async function readTemplateFile(file) {
   }
   $("templateText").value = data.text || "";
   $("templateStatus").textContent = "已读取模板：" + file.name + "（" + (data.chars || 0) + " 字）";
+  if (data.text) saveTemplateMemory(file.name);
 }
 $("templateFile").addEventListener("change", e => readTemplateFile(e.target.files[0]));
 $("templateDrop").addEventListener("click", () => $("templateFile").click());
@@ -617,8 +652,11 @@ $("copyOcr").addEventListener("click", () => navigator.clipboard.writeText($("so
 $("copyResult").addEventListener("click", () => navigator.clipboard.writeText($("result").textContent));
 $("saveApi").addEventListener("click", saveApiSettings);
 $("clearApi").addEventListener("click", clearApiSettings);
+$("saveTemplateMemory").addEventListener("click", () => saveTemplateMemory());
+$("clearTemplateMemory").addEventListener("click", clearTemplateMemory);
 $("clearBtn").addEventListener("click", resetPage);
 loadApiSettings();
+loadTemplateMemory();
 window.addEventListener("pageshow", resetPage);
 </script>
 </body>
