@@ -26,6 +26,7 @@ except Exception:
 
 MAX_PDF_PAGES = int(os.getenv("MAX_PDF_PAGES", "10"))
 OCR_ENGINE = "ocrspace+tesseract"
+OCR_PROVIDER = os.getenv("OCR_PROVIDER", "auto").strip().lower()
 OCR_SPACE_API_KEY = os.getenv("OCR_SPACE_API_KEY", "")
 OCR_SPACE_ENDPOINT = os.getenv("OCR_SPACE_ENDPOINT", "https://api.ocr.space/parse/image")
 GOOGLE_VISION_API_KEY = os.getenv("GOOGLE_VISION_API_KEY", "")
@@ -79,6 +80,7 @@ def health():
     return {
         "ok": True,
         "engine": OCR_ENGINE,
+        "provider": OCR_PROVIDER,
         "googleVision": bool(GOOGLE_VISION_API_KEY),
         "ocrspace": bool(OCR_SPACE_API_KEY),
         "rapidocr": RapidOCR is not None and ENABLE_LOCAL_RAPIDOCR,
@@ -185,21 +187,31 @@ def recognize_pdf_pages_cloud(data: bytes, doc_type: str) -> list[tuple[int, str
 
 
 def recognize_cloud_image(data: bytes, filename: str, mime: str, doc_type: str) -> str:
-    if GOOGLE_VISION_API_KEY:
-        text = recognize_google_vision(data)
+    providers = cloud_provider_order()
+    for provider in providers:
+        if provider == "ocrspace":
+            text = recognize_ocr_space(data, filename, mime, doc_type)
+        elif provider == "google":
+            text = recognize_google_vision(data)
+        else:
+            text = ""
         if is_reliable_text(text, mode="full", doc_type=doc_type):
             return text
-    text = recognize_ocr_space(data, filename, mime, doc_type)
-    if is_reliable_text(text, mode="full", doc_type=doc_type):
-        return text
     return ""
 
 
-def image_to_jpeg_bytes(image: Image.Image) -> bytes:
-    buffer = io.BytesIO()
-    image = normalize_image_size(ImageOps.exif_transpose(image).convert("RGB"))
-    image.save(buffer, "JPEG", quality=92, optimize=True)
-    return buffer.getvalue()
+def cloud_provider_order() -> list[str]:
+    if OCR_PROVIDER in {"ocrspace", "ocr-space", "space"}:
+        return ["ocrspace"]
+    if OCR_PROVIDER in {"google", "google-vision", "vision"}:
+        return ["google"]
+    if OCR_PROVIDER == "local":
+        return []
+    if OCR_SPACE_API_KEY and not GOOGLE_VISION_API_KEY:
+        return ["ocrspace"]
+    if GOOGLE_VISION_API_KEY and not OCR_SPACE_API_KEY:
+        return ["google"]
+    return ["ocrspace", "google"]
 
 
 def recognize_google_vision(data: bytes) -> str:
@@ -234,6 +246,13 @@ def recognize_google_vision(data: bytes) -> str:
         return ""
     annotation = responses[0].get("fullTextAnnotation") or {}
     return cleanup_text(annotation.get("text") or "")
+
+
+def image_to_jpeg_bytes(image: Image.Image) -> bytes:
+    buffer = io.BytesIO()
+    image = normalize_image_size(ImageOps.exif_transpose(image).convert("RGB"))
+    image.save(buffer, "JPEG", quality=92, optimize=True)
+    return buffer.getvalue()
 
 
 def recognize_ocr_space(data: bytes, filename: str, mime: str, doc_type: str) -> str:

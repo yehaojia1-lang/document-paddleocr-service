@@ -29,5 +29,9 @@ services:
         value: "1800"
       - key: PDF_RENDER_SCALE
         value: "2.4"
+      - key: OCR_PROVIDER
+        value: ocrspace
+      - key: OCR_SPACE_API_KEY
+        sync: false
       - key: GOOGLE_VISION_API_KEY
         sync: false

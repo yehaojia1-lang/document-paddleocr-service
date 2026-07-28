@@ -7,6 +7,7 @@ const SUPABASE_URL = (process.env.SUPABASE_URL || "").replace(/\/+$/, "");
 const SUPABASE_SECRET_KEY = process.env.SUPABASE_SECRET_KEY || "";
 const TEMPLATE_TEXT_LIMIT = 14000;
 const SUPABASE_TIMEOUT_MS = 12000;
+const OCR_PROXY_TIMEOUT_MS = 65000;
 
 const server = http.createServer(async (req, res) => {
   try {
@@ -40,13 +41,18 @@ server.listen(PORT, "0.0.0.0", () => {
 
 async function proxyOcr(req, res) {
   const body = await readBody(req);
-  const response = await fetch(`${OCR_SERVICE_URL}/ocr`, {
+  const response = await fetchWithTimeout(`${OCR_SERVICE_URL}/ocr`, {
     method: "POST",
     headers: { "content-type": req.headers["content-type"] || "multipart/form-data" },
     body,
-  });
+  }, OCR_PROXY_TIMEOUT_MS).catch((error) => ({
+    status: 502,
+    headers: new Map([["content-type", "application/json; charset=utf-8"]]),
+    text: async () => JSON.stringify({ error: `OCR service unavailable: ${error.message || error}` }),
+  }));
   const text = await response.text();
-  res.writeHead(response.status, { "content-type": response.headers.get("content-type") || "application/json; charset=utf-8" });
+  const contentType = typeof response.headers?.get === "function" ? response.headers.get("content-type") : "application/json; charset=utf-8";
+  res.writeHead(response.status, { "content-type": contentType || "application/json; charset=utf-8" });
   res.end(text);
 }
 
