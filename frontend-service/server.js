@@ -323,7 +323,7 @@ function sendHtml(res) {
     <div class="grid">
       <div>
         <h2>上传待翻译文件</h2>
-        <input id="file" type="file" accept="image/*,.pdf,.doc,.docx" />
+        <input id="file" type="file" accept="image/*,.pdf,.doc,.docx" multiple />
         <div id="drop" class="drop" tabindex="0"><p>选择文件，或把文件拖进这里。电脑也可以点击这里后 Ctrl+V 粘贴截图。</p></div>
         <div class="controls"><button id="ocrBtn">开始 OCR</button><button class="secondary" id="copyOcr">复制识别文本</button></div>
         <p id="status" class="tiny">等待上传文件</p><div class="bar"><span id="progress"></span></div>
@@ -354,14 +354,14 @@ function sendHtml(res) {
 </main>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
 <script>
-let selectedFile = null;
+let selectedFiles = [];
 const $ = (id) => document.getElementById(id);
 if (window.pdfjsLib) {
   pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
 }
 function setProgress(n, text) { $("progress").style.width = Math.round(n * 100) + "%"; if (text) $("status").textContent = text; }
 function resetPage() {
-  selectedFile = null;
+  selectedFiles = [];
   $("file").value = "";
   $("templateFile").value = "";
   $("source").value = "";
@@ -372,15 +372,17 @@ function resetPage() {
   $("templateStatus").textContent = "可上传身份证、出生证、毕业证等 Word 模板，或粘贴你的翻译规则。";
   setProgress(0, "等待上传文件");
 }
-function showFile(file) {
-  selectedFile = file;
+function showFiles(files) {
+  selectedFiles = Array.from(files || []).filter(Boolean);
   $("drop").innerHTML = "";
-  if (file && file.type.startsWith("image/")) {
-    const img = document.createElement("img"); img.src = URL.createObjectURL(file); $("drop").appendChild(img);
+  if (selectedFiles.length === 1 && selectedFiles[0].type.startsWith("image/")) {
+    const img = document.createElement("img"); img.src = URL.createObjectURL(selectedFiles[0]); $("drop").appendChild(img);
+  } else if (selectedFiles.length > 0) {
+    $("drop").innerHTML = "<p>" + selectedFiles.map((file, index) => (index + 1) + ". " + file.name).join("<br>") + "</p>";
   } else {
-    $("drop").innerHTML = "<p>" + (file ? file.name : "等待上传文件") + "</p>";
+    $("drop").innerHTML = "<p>等待上传文件</p>";
   }
-  setProgress(0, file ? "已选择文件：" + file.name : "等待上传文件");
+  setProgress(0, selectedFiles.length ? "已选择 " + selectedFiles.length + " 个文件" : "等待上传文件");
 }
 async function makePdfUploadFile(file) {
   if (!window.pdfjsLib) return { uploadFile: file, text: "" };
@@ -406,13 +408,13 @@ async function makePdfUploadFile(file) {
   const imageName = (file.name || "document.pdf").replace(/\\.pdf$/i, "") + "-page-1.jpg";
   return { uploadFile: new File([blob], imageName, { type: "image/jpeg" }), text: "" };
 }
-$("file").addEventListener("change", e => showFile(e.target.files[0]));
+$("file").addEventListener("change", e => showFiles(e.target.files));
 $("drop").addEventListener("click", () => $("file").click());
 $("drop").addEventListener("dragover", e => { e.preventDefault(); $("drop").classList.add("drag"); });
 $("drop").addEventListener("dragleave", () => $("drop").classList.remove("drag"));
-$("drop").addEventListener("drop", e => { e.preventDefault(); $("drop").classList.remove("drag"); showFile(e.dataTransfer.files[0]); });
-$("drop").addEventListener("paste", e => { const file = [...e.clipboardData.files][0]; if (file) showFile(file); });
-document.addEventListener("paste", e => { const file = [...e.clipboardData.files][0]; if (file) showFile(file); });
+$("drop").addEventListener("drop", e => { e.preventDefault(); $("drop").classList.remove("drag"); showFiles(e.dataTransfer.files); });
+$("drop").addEventListener("paste", e => { const files = [...e.clipboardData.files]; if (files.length) showFiles(files); });
+document.addEventListener("paste", e => { const files = [...e.clipboardData.files]; if (files.length) showFiles(files); });
 async function readTemplateFile(file) {
   if (!file) return;
   $("templateDrop").innerHTML = "<p>" + file.name + "</p>";
@@ -441,34 +443,43 @@ $("templateDrop").addEventListener("paste", e => {
   readTemplateFile(file);
 });
 $("ocrBtn").addEventListener("click", async () => {
-  if (!selectedFile) return alert("请先选择文件");
-  const isPdf = selectedFile.name && selectedFile.name.toLowerCase().endsWith(".pdf");
-  let uploadFile = selectedFile;
-  setProgress(.12, isPdf ? "PDF 正在本地预处理第一页" : "正在上传到 OCR 服务");
-  if (isPdf) {
-    try {
-      const prepared = await makePdfUploadFile(selectedFile);
-      if (prepared.text) {
-        $("source").value = prepared.text;
-        setProgress(1, "已直接读取 PDF 文字层，请校对后翻译");
-        return;
+  if (!selectedFiles.length) return alert("请先选择文件");
+  const results = [];
+  $("source").value = "";
+  $("ocrBtn").disabled = true;
+  try {
+    for (let i = 0; i < selectedFiles.length; i++) {
+      const selectedFile = selectedFiles[i];
+      const isPdf = selectedFile.name && selectedFile.name.toLowerCase().endsWith(".pdf");
+      let uploadFile = selectedFile;
+      setProgress(i / selectedFiles.length, "正在识别第 " + (i + 1) + " / " + selectedFiles.length + " 个文件");
+      if (isPdf) {
+        try {
+          const prepared = await makePdfUploadFile(selectedFile);
+          if (prepared.text) {
+            results.push("Page " + (i + 1) + " - " + selectedFile.name + "\n" + prepared.text.replace(/^Page 1\n/, ""));
+            $("source").value = results.join("\n\n");
+            continue;
+          }
+          uploadFile = prepared.uploadFile;
+        } catch (err) {
+          console.warn("PDF browser pre-processing failed; falling back to server OCR", err);
+        }
       }
-      uploadFile = prepared.uploadFile;
-      setProgress(.32, "PDF 已转为图片，正在上传 OCR");
-    } catch (err) {
-      console.warn("PDF browser pre-processing failed; falling back to server OCR", err);
-      setProgress(.25, "PDF 本地预处理失败，改用服务器识别");
+      const form = new FormData();
+      form.set("file", uploadFile, uploadFile.name || "upload");
+      form.set("mode", $("docType").value === "id-card" ? "id" : "full");
+      form.set("doc_type", $("docType").value);
+      const res = await fetch("/api/ocr", { method:"POST", body: form });
+      const data = await res.json();
+      results.push("Page " + (i + 1) + " - " + selectedFile.name + "\n" + (data.text || data.warning || data.error || "没有识别到文字"));
+      $("source").value = results.join("\n\n");
+      setProgress((i + 1) / selectedFiles.length, "已完成 " + (i + 1) + " / " + selectedFiles.length + " 个文件");
     }
+    setProgress(1, "识别完成，请校对后翻译");
+  } finally {
+    $("ocrBtn").disabled = false;
   }
-  const form = new FormData();
-  form.set("file", uploadFile, uploadFile.name || "upload");
-  form.set("mode", $("docType").value === "id-card" ? "id" : "full");
-  form.set("doc_type", $("docType").value);
-  const res = await fetch("/api/ocr", { method:"POST", body: form });
-  setProgress(.75, isPdf ? "PDF 页面正在 OCR 识别，请稍等" : "OCR 正在识别，请稍等");
-  const data = await res.json();
-  $("source").value = data.text || "";
-  setProgress(1, data.text ? "识别完成，请校对后翻译" : (data.warning || data.error || "没有识别到文字"));
 });
 $("translateBtn").addEventListener("click", async () => {
   const text = $("source").value.trim();
