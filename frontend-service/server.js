@@ -339,7 +339,7 @@ function sendHtml(res) {
   <section class="panel">
     <div class="controls">
       <select id="direction"><option value="zh-to-en">中文翻译成英文</option><option value="en-to-zh">英文/外文翻译成中文</option></select>
-      <select id="docType"><option value="id-card">身份证</option><option value="driver-license">驾照</option><option value="graduation-certificate">毕业证</option><option value="degree-certificate">学位证</option><option value="birth-certificate">出生证</option><option value="other">其他文件</option></select>
+      <select id="docType"><option value="id-card">身份证</option><option value="household-register">户口本</option><option value="driver-license">驾照</option><option value="graduation-certificate">毕业证</option><option value="degree-certificate">学位证</option><option value="birth-certificate">出生证</option><option value="other">其他文件</option></select>
       <select id="provider"><option value="auto">自动选择模型</option><option value="deepseek">DeepSeek</option><option value="openai">OpenAI</option><option value="custom">自定义 API</option><option value="offline">离线规则</option></select>
       <button id="clearBtn" class="secondary" type="button">清空全部</button>
     </div>
@@ -365,7 +365,8 @@ function sendHtml(res) {
         <h2>上传参考模板 / 规则</h2>
         <input id="templateFile" type="file" accept=".docx,.txt,.md" />
         <div id="templateDrop" class="template-drop" tabindex="0"><p>选择模板文件，或把 Word / TXT / MD 规则文件拖到这里。</p></div>
-        <div class="controls"><button id="saveTemplateMemory" type="button">保存模板记忆</button><button id="clearTemplateMemory" class="secondary" type="button">清除模板记忆</button></div>
+        <div class="controls"><button id="saveTemplateMemory" type="button">保存到模板库</button><button id="clearTemplateMemory" class="secondary" type="button">删除选中模板</button></div>
+        <select id="templateMemoryList"><option value="">模板库会显示在这里</option></select>
         <textarea id="templateText" placeholder="模板文字会出现在这里；也可以直接粘贴翻译规范、术语表或示例译文。"></textarea>
         <p id="templateStatus" class="tiny">可上传身份证、出生证、毕业证等 Word 模板，或粘贴你的翻译规则。</p>
       </div>
@@ -426,39 +427,114 @@ function clearApiSettings() {
   $("apiModel").value = "";
   $("apiStatus").textContent = "API 设置已清除。";
 }
-function showEmptyTemplateMemory() {
-  $("templateDrop").innerHTML = "<p>选择模板文件，或把 Word / TXT / MD 规则文件拖到这里。</p>";
-  $("templateStatus").textContent = "可上传身份证、出生证、毕业证等 Word 模板，或粘贴你的翻译规则。";
+function docTypeLabel(value) {
+  const labels = {
+    "id-card": "身份证",
+    "household-register": "户口本",
+    "driver-license": "驾照",
+    "graduation-certificate": "毕业证",
+    "degree-certificate": "学位证",
+    "birth-certificate": "出生证",
+    other: "其他文件",
+  };
+  return labels[value] || labels.other;
 }
-function loadTemplateMemory() {
+function inferDocTypeFromName(name) {
+  const value = String(name || "").toLowerCase();
+  if (/户口|户籍|household|hukou|register/.test(value)) return "household-register";
+  if (/身份证|identity|id card|citizen/.test(value)) return "id-card";
+  if (/驾照|驾驶|driver|license|licence/.test(value)) return "driver-license";
+  if (/毕业|graduation|diploma/.test(value)) return "graduation-certificate";
+  if (/学位|degree/.test(value)) return "degree-certificate";
+  if (/出生|birth/.test(value)) return "birth-certificate";
+  return "";
+}
+function readTemplateLibrary() {
   try {
-    const saved = JSON.parse(localStorage.getItem(TEMPLATE_STORAGE_KEY) || "{}");
-    if (!saved.text) {
-      showEmptyTemplateMemory();
-      return;
+    const raw = JSON.parse(localStorage.getItem(TEMPLATE_STORAGE_KEY) || "[]");
+    if (Array.isArray(raw)) return raw.filter(item => item && item.text);
+    if (raw && raw.text) {
+      return [{
+        id: "legacy-" + Date.now(),
+        name: raw.name || "旧版模板记忆",
+        docType: raw.docType || "other",
+        text: raw.text,
+        savedAt: raw.savedAt || new Date().toISOString(),
+      }];
     }
-    $("templateText").value = saved.text;
-    $("templateStatus").textContent = "已加载模板记忆：" + (saved.name || "已保存规则") + "（" + saved.text.length + " 字）";
-    $("templateDrop").innerHTML = "<p>" + (saved.name || "已保存模板记忆") + "</p>";
-  } catch {
-    $("templateStatus").textContent = "模板记忆读取失败，可以重新上传模板后保存。";
-  }
+  } catch {}
+  return [];
 }
-function saveTemplateMemory(name = "手动保存的模板规则") {
-  const text = $("templateText").value.trim();
+function writeTemplateLibrary(items) {
+  localStorage.setItem(TEMPLATE_STORAGE_KEY, JSON.stringify(items));
+}
+function renderTemplateLibrary(selectedId = "") {
+  const items = readTemplateLibrary();
+  const list = $("templateMemoryList");
+  list.innerHTML = "";
+  const currentType = $("docType").value;
+  const matching = items.filter(item => item.docType === currentType);
+  const summary = document.createElement("option");
+  summary.value = "";
+  summary.textContent = items.length ? "模板库：共 " + items.length + " 条；当前类型匹配 " + matching.length + " 条" : "模板库为空";
+  list.appendChild(summary);
+  items.forEach(item => {
+    const option = document.createElement("option");
+    option.value = item.id;
+    option.textContent = "[" + docTypeLabel(item.docType) + "] " + item.name + "（" + item.text.length + "字）";
+    list.appendChild(option);
+  });
+  list.value = selectedId;
+}
+function applyTemplateMemoryByDocType() {
+  const items = readTemplateLibrary();
+  renderTemplateLibrary();
+  const currentType = $("docType").value;
+  const matching = items.filter(item => item.docType === currentType);
+  if (!matching.length) {
+    $("templateText").value = "";
+    $("templateDrop").innerHTML = "<p>选择模板文件，或把 Word / TXT / MD 规则文件拖到这里。</p>";
+    $("templateStatus").textContent = items.length ? "模板库已有 " + items.length + " 条，但当前" + docTypeLabel(currentType) + "没有匹配模板。" : "模板库为空，可上传模板后自动记住。";
+    return;
+  }
+  $("templateText").value = matching.map(item => "【" + docTypeLabel(item.docType) + "模板：" + item.name + "】" + NL + item.text).join(NL + NL + "---" + NL + NL);
+  $("templateDrop").innerHTML = "<p>已自动匹配 " + matching.length + " 条" + docTypeLabel(currentType) + "模板</p>";
+  $("templateStatus").textContent = "已自动加载" + docTypeLabel(currentType) + "模板 " + matching.length + " 条。";
+}
+function saveTemplateMemory(name = "手动保存的模板规则", forcedText = "") {
+  const text = (forcedText || $("templateText").value).trim();
   if (!text) {
     $("templateStatus").textContent = "模板框为空，不能保存。";
     return;
   }
-  localStorage.setItem(TEMPLATE_STORAGE_KEY, JSON.stringify({ name, text, savedAt: new Date().toISOString() }));
-  $("templateStatus").textContent = "模板记忆已保存：" + name + "（" + text.length + " 字）";
-  $("templateDrop").innerHTML = "<p>" + name + "</p>";
+  const guessedType = inferDocTypeFromName(name);
+  const docType = guessedType || $("docType").value || "other";
+  if (guessedType) $("docType").value = guessedType;
+  const items = readTemplateLibrary();
+  const existingIndex = items.findIndex(item => item.name === name && item.docType === docType);
+  const entry = { id: existingIndex >= 0 ? items[existingIndex].id : "tpl-" + Date.now() + "-" + Math.random().toString(16).slice(2), name, docType, text, savedAt: new Date().toISOString() };
+  if (existingIndex >= 0) items[existingIndex] = entry;
+  else items.push(entry);
+  writeTemplateLibrary(items);
+  renderTemplateLibrary(entry.id);
+  applyTemplateMemoryByDocType();
+  $("templateMemoryList").value = entry.id;
+  $("templateStatus").textContent = "已保存到模板库：[" + docTypeLabel(docType) + "] " + name + "（" + text.length + " 字）。";
 }
-function clearTemplateMemory() {
-  localStorage.removeItem(TEMPLATE_STORAGE_KEY);
-  $("templateText").value = "";
-  showEmptyTemplateMemory();
-  $("templateStatus").textContent = "模板记忆已清除。";
+function deleteSelectedTemplateMemory() {
+  const selectedId = $("templateMemoryList").value;
+  if (!selectedId) {
+    $("templateStatus").textContent = "请先在模板库下拉框里选择要删除的模板。";
+    return;
+  }
+  const items = readTemplateLibrary();
+  const target = items.find(item => item.id === selectedId);
+  writeTemplateLibrary(items.filter(item => item.id !== selectedId));
+  applyTemplateMemoryByDocType();
+  $("templateStatus").textContent = "已删除选中模板：" + (target ? target.name : selectedId) + "。其他模板仍然保留。";
+}
+function loadTemplateMemory() {
+  applyTemplateMemoryByDocType();
 }
 function resetPage() {
   selectedFiles = [];
@@ -472,6 +548,11 @@ function resetPage() {
 }
 function showFiles(files) {
   selectedFiles = Array.from(files || []).filter(Boolean);
+  const guessedType = selectedFiles.map(file => inferDocTypeFromName(file.name)).find(Boolean);
+  if (guessedType) {
+    $("docType").value = guessedType;
+    applyTemplateMemoryByDocType();
+  }
   $("drop").innerHTML = "";
   if (selectedFiles.length === 1 && selectedFiles[0].type.startsWith("image/")) {
     const img = document.createElement("img"); img.src = URL.createObjectURL(selectedFiles[0]); $("drop").appendChild(img);
@@ -541,8 +622,16 @@ async function ocrUploadFile(uploadFile) {
   form.set("file", uploadFile, uploadFile.name || "upload");
   form.set("mode", $("docType").value === "id-card" ? "id" : "full");
   form.set("doc_type", $("docType").value);
-  const res = await fetch("/api/ocr", { method:"POST", body: form });
-  return await res.json();
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 120000);
+  try {
+    const res = await fetch("/api/ocr", { method:"POST", body: form, signal: controller.signal });
+    return await res.json();
+  } catch (error) {
+    return { error: error.name === "AbortError" ? "该页 OCR 超时，已跳过。可单独截图该页再试。" : "OCR 请求失败：" + (error.message || error) };
+  } finally {
+    clearTimeout(timer);
+  }
 }
 $("file").addEventListener("change", e => showFiles(e.target.files));
 $("drop").addEventListener("click", () => $("file").click());
@@ -568,6 +657,16 @@ async function readTemplateFile(file) {
   if (data.text) saveTemplateMemory(file.name);
 }
 $("templateFile").addEventListener("change", e => readTemplateFile(e.target.files[0]));
+$("docType").addEventListener("change", applyTemplateMemoryByDocType);
+$("templateMemoryList").addEventListener("change", () => {
+  const selectedId = $("templateMemoryList").value;
+  const item = readTemplateLibrary().find(entry => entry.id === selectedId);
+  if (!item) return applyTemplateMemoryByDocType();
+  $("docType").value = item.docType;
+  $("templateText").value = item.text;
+  $("templateDrop").innerHTML = "<p>" + item.name + "</p>";
+  $("templateStatus").textContent = "已选择模板：[" + docTypeLabel(item.docType) + "] " + item.name + "（" + item.text.length + " 字）";
+});
 $("templateDrop").addEventListener("click", () => $("templateFile").click());
 $("templateDrop").addEventListener("dragover", e => { e.preventDefault(); $("templateDrop").classList.add("drag"); });
 $("templateDrop").addEventListener("dragleave", () => $("templateDrop").classList.remove("drag"));
@@ -653,7 +752,7 @@ $("copyResult").addEventListener("click", () => navigator.clipboard.writeText($(
 $("saveApi").addEventListener("click", saveApiSettings);
 $("clearApi").addEventListener("click", clearApiSettings);
 $("saveTemplateMemory").addEventListener("click", () => saveTemplateMemory());
-$("clearTemplateMemory").addEventListener("click", clearTemplateMemory);
+$("clearTemplateMemory").addEventListener("click", deleteSelectedTemplateMemory);
 $("clearBtn").addEventListener("click", resetPage);
 loadApiSettings();
 loadTemplateMemory();
