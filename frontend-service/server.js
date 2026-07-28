@@ -6,6 +6,7 @@ const OCR_SERVICE_URL = (process.env.OCR_SERVICE_URL || "https://document-paddle
 const SUPABASE_URL = (process.env.SUPABASE_URL || "").replace(/\/+$/, "");
 const SUPABASE_SECRET_KEY = process.env.SUPABASE_SECRET_KEY || "";
 const TEMPLATE_TEXT_LIMIT = 14000;
+const SUPABASE_TIMEOUT_MS = 12000;
 
 const server = http.createServer(async (req, res) => {
   try {
@@ -95,7 +96,12 @@ async function listTemplateLibrary(req, res) {
 
 async function saveTemplateLibrary(req, res) {
   if (!ensureSupabase(res)) return;
-  const payload = JSON.parse((await readBody(req)).toString("utf8") || "{}");
+  let payload = {};
+  try {
+    payload = JSON.parse((await readBody(req)).toString("utf8") || "{}");
+  } catch {
+    return sendJson(res, 400, { error: "Invalid JSON payload." });
+  }
   const name = String(payload.name || "Untitled template").trim().slice(0, 200);
   const docType = String(payload.docType || "other").trim().slice(0, 80);
   const text = cleanTemplateText(String(payload.text || "")).slice(0, TEMPLATE_TEXT_LIMIT);
@@ -109,11 +115,11 @@ async function saveTemplateLibrary(req, res) {
   };
   const id = typeof payload.id === "string" && payload.id ? payload.id : "";
   const endpoint = id ? `${SUPABASE_URL}/rest/v1/template_rules?id=eq.${encodeURIComponent(id)}` : `${SUPABASE_URL}/rest/v1/template_rules`;
-  const response = await fetch(endpoint, {
+  const response = await fetchWithTimeout(endpoint, {
     method: id ? "PATCH" : "POST",
     headers: supabaseHeaders({ prefer: "return=representation" }),
     body: JSON.stringify(body),
-  });
+  }, SUPABASE_TIMEOUT_MS).catch((error) => ({ ok: false, status: 502, json: async () => ({ message: error.message || "Supabase request failed." }) }));
   const data = await response.json().catch(() => []);
   if (!response.ok) return sendJson(res, response.status, { error: data?.message || "Failed to save cloud template." });
   const row = Array.isArray(data) ? data[0] : data;
@@ -134,6 +140,16 @@ async function deleteTemplateLibrary(req, res) {
     return sendJson(res, response.status, { error: data?.message || "Failed to delete cloud template." });
   }
   sendJson(res, 200, { ok: true });
+}
+
+async function fetchWithTimeout(url, options, timeoutMs) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...options, signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 function fromSupabaseTemplate(row) {
@@ -835,7 +851,7 @@ $("ocrBtn").addEventListener("click", async () => {
     for (let i = 0; i < selectedFiles.length; i++) {
       const selectedFile = selectedFiles[i];
       const isPdf = selectedFile.name && selectedFile.name.toLowerCase().endsWith(".pdf");
-      if (isPdf && window.pdfjsLib) {
+      if (false && isPdf && window.pdfjsLib) {
         try {
           const pdf = await loadPdf(selectedFile);
           for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber++) {
