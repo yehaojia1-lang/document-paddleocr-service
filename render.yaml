@@ -24,11 +24,11 @@ services:
       - key: MAX_PDF_PAGES
         value: "10"
       - key: MAX_IMAGE_SIDE
-        value: "2200"
+        value: "1500"
       - key: MIN_IMAGE_SIDE
-        value: "1800"
+        value: "1200"
       - key: PDF_RENDER_SCALE
-        value: "2.4"
+        value: "1.45"
       - key: OCR_PROVIDER
         value: ocrspace
       - key: OCR_SPACE_API_KEY

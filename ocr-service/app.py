@@ -32,9 +32,10 @@ OCR_SPACE_ENDPOINT = os.getenv("OCR_SPACE_ENDPOINT", "https://api.ocr.space/pars
 GOOGLE_VISION_API_KEY = os.getenv("GOOGLE_VISION_API_KEY", "")
 GOOGLE_VISION_ENDPOINT = os.getenv("GOOGLE_VISION_ENDPOINT", "https://vision.googleapis.com/v1/images:annotate")
 ENABLE_LOCAL_RAPIDOCR = os.getenv("ENABLE_LOCAL_RAPIDOCR", "").lower() in {"1", "true", "yes"}
-MAX_IMAGE_SIDE = int(os.getenv("MAX_IMAGE_SIDE", "3200"))
-MIN_IMAGE_SIDE = int(os.getenv("MIN_IMAGE_SIDE", "1800"))
-PDF_RENDER_SCALE = float(os.getenv("PDF_RENDER_SCALE", "2.4"))
+MAX_IMAGE_SIDE = int(os.getenv("MAX_IMAGE_SIDE", "1500"))
+MIN_IMAGE_SIDE = int(os.getenv("MIN_IMAGE_SIDE", "1200"))
+PDF_RENDER_SCALE = float(os.getenv("PDF_RENDER_SCALE", "1.45"))
+MAX_UPLOAD_MB = float(os.getenv("MAX_UPLOAD_MB", "8"))
 ROTATIONS = (0, 90, 270)
 PSM_MODES = ("6", "11")
 RAPID_OCR = None
@@ -113,6 +114,8 @@ def ocr(
     data = file.file.read()
     if not data:
         raise HTTPException(status_code=400, detail="Empty file")
+    if len(data) > MAX_UPLOAD_MB * 1024 * 1024:
+        raise HTTPException(status_code=413, detail=f"File is too large for the free OCR instance. Please upload a file under {MAX_UPLOAD_MB:g} MB or split the PDF.")
 
     suffix = Path(file.filename or "").suffix.lower()
     mime = file.content_type or ""
@@ -135,7 +138,7 @@ def ocr(
             for page_index, cloud_text in cloud_pages:
                 text = postprocess_document_text(cloud_text, mode, doc_type)
                 pages.append({"index": page_index, "text": text, "rotation": 0, "score": score_text(text, mode=mode, doc_type=doc_type)})
-        else:
+        elif not cloud_provider_order():
             for index, image in enumerate(load_images(data, suffix, mime), start=1):
                 text, rotation, score = recognize_best(image, mode=mode, doc_type=doc_type)
                 if is_reliable_text(text, mode=mode, doc_type=doc_type):
@@ -175,14 +178,23 @@ def extract_pdf_text_pages(data: bytes) -> list[tuple[int, str]]:
 
 def recognize_pdf_pages_cloud(data: bytes, doc_type: str) -> list[tuple[int, str]]:
     pages = []
-    try:
-        for index, image in enumerate(render_pdf_pages(data), start=1):
+    document = pdfium.PdfDocument(data)
+    page_count = min(len(document), MAX_PDF_PAGES)
+    for page_index in range(page_count):
+        image_data = None
+        try:
+            page = document[page_index]
+            bitmap = page.render(scale=PDF_RENDER_SCALE)
+            image = bitmap.to_pil()
             image_data = image_to_jpeg_bytes(image)
-            text = recognize_cloud_image(image_data, f"page-{index}.jpg", "image/jpeg", doc_type)
+            image.close()
+            text = recognize_cloud_image(image_data, f"page-{page_index + 1}.jpg", "image/jpeg", doc_type)
             if is_reliable_text(text, mode="full", doc_type=doc_type):
-                pages.append((index, text))
-    except Exception:
-        return []
+                pages.append((page_index + 1, text))
+        except Exception:
+            continue
+        finally:
+            image_data = None
     return pages
 
 
