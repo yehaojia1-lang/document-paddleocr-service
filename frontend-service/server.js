@@ -766,10 +766,10 @@ async function fetchWithTimeout(url, options, timeoutMs) {
 async function ocrUploadFormWithRetry(form) {
   const endpoints = ["/api/ocr", "https://document-paddleocr-service.onrender.com/ocr"];
   let lastError = "";
-  for (let attempt = 1; attempt <= 3; attempt++) {
+  for (let attempt = 1; attempt <= 2; attempt++) {
     for (const endpoint of endpoints) {
       try {
-        const res = await fetchWithTimeout(endpoint, { method:"POST", body: form }, 90000);
+        const res = await fetchWithTimeout(endpoint, { method:"POST", body: form }, 45000);
         const data = await res.json();
         if (res.ok && data && (data.text || data.warning)) return data;
         lastError = data?.error || data?.detail || res.statusText || "OCR 没有返回文本";
@@ -779,7 +779,7 @@ async function ocrUploadFormWithRetry(form) {
     }
     setProgress(Math.min(0.95, Number($("progress").style.width.replace("%", "")) / 100 || 0), "OCR 正在自动重试第 " + (attempt + 1) + " 次");
   }
-  return { error: lastError + "。已重试 3 次；建议单独截图该页再试。" };
+  return { error: lastError + "。已重试 2 次；请确认 Google Vision API 已启用，或单独截图该页再试。" };
 }
 $("file").addEventListener("change", e => showFiles(e.target.files));
 $("drop").addEventListener("click", () => $("file").click());

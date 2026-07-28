@@ -103,12 +103,12 @@ def root_head():
 
 
 @app.post("/ocr")
-async def ocr(
+def ocr(
     file: UploadFile = File(...),
     mode: str = Form("full"),
     doc_type: str = Form("other"),
 ):
-    data = await file.read()
+    data = file.file.read()
     if not data:
         raise HTTPException(status_code=400, detail="Empty file")
 
