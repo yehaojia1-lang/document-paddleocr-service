@@ -508,7 +508,7 @@ function setProgress(n, text) { $("progress").style.width = Math.round(n * 100) 
 function loadApiSettings() {
   try {
     const saved = JSON.parse(localStorage.getItem(API_STORAGE_KEY) || "{}");
-    if (saved.provider) $("provider").value = saved.provider;
+    if (saved.provider) $("provider").value = normalizeSavedProvider(saved.provider);
     $("apiKey").value = saved.apiKey || "";
     $("apiBaseUrl").value = saved.baseUrl || "";
     $("apiModel").value = saved.model || "";
@@ -519,7 +519,7 @@ function loadApiSettings() {
 }
 function saveApiSettings() {
   const settings = {
-    provider: $("provider").value,
+    provider: normalizeSavedProvider($("provider").value),
     apiKey: $("apiKey").value.trim(),
     baseUrl: $("apiBaseUrl").value.trim(),
     model: $("apiModel").value.trim(),
@@ -529,10 +529,14 @@ function saveApiSettings() {
 }
 function clearApiSettings() {
   localStorage.removeItem(API_STORAGE_KEY);
+  $("provider").value = "auto";
   $("apiKey").value = "";
   $("apiBaseUrl").value = "";
   $("apiModel").value = "";
   $("apiStatus").textContent = "API 设置已清除。";
+}
+function normalizeSavedProvider(value) {
+  return value === "deepseek" || value === "openai" || value === "custom" ? value : "auto";
 }
 function docTypeLabel(value) {
   const labels = {
@@ -898,7 +902,7 @@ $("translateBtn").addEventListener("click", async () => {
       templateText:$("templateText").value,
       direction:$("direction").value,
       docType:$("docType").value,
-      provider:$("provider").value,
+      provider:normalizeSavedProvider($("provider").value),
       apiKey:$("apiKey").value.trim(),
       baseUrl:$("apiBaseUrl").value.trim(),
       model:$("apiModel").value.trim()
