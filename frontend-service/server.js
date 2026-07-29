@@ -203,10 +203,10 @@ async function callModel(provider, text, direction, docType, templateText, model
   if (provider === "offline") return null;
   const isDeepSeek = provider === "deepseek";
   const isCustom = provider === "custom";
-  const key = modelConfig.apiKey || (isDeepSeek ? process.env.DEEPSEEK_API_KEY : process.env.OPENAI_API_KEY);
+  const key = modelConfig.apiKey || (isCustom ? process.env.CUSTOM_API_KEY || process.env.DEEPSEEK_API_KEY : isDeepSeek ? process.env.DEEPSEEK_API_KEY : process.env.OPENAI_API_KEY);
   if (!key) return null;
-  const model = modelConfig.model || (isDeepSeek ? process.env.DEEPSEEK_MODEL || "deepseek-chat" : process.env.OPENAI_MODEL || "gpt-4.1-mini");
-  const baseUrl = modelConfig.baseUrl || (isDeepSeek ? "https://api.deepseek.com" : "https://api.openai.com/v1");
+  const model = modelConfig.model || (isCustom ? process.env.CUSTOM_API_MODEL || process.env.DEEPSEEK_MODEL || "deepseek-chat" : isDeepSeek ? process.env.DEEPSEEK_MODEL || "deepseek-chat" : process.env.OPENAI_MODEL || "gpt-4.1-mini");
+  const baseUrl = modelConfig.baseUrl || (isCustom ? process.env.CUSTOM_API_BASE_URL || "https://api.deepseek.com" : isDeepSeek ? "https://api.deepseek.com" : "https://api.openai.com/v1");
   const endpoint = normalizeChatCompletionsUrl(baseUrl, isCustom ? "custom" : provider);
 
   const response = await fetch(endpoint, {
