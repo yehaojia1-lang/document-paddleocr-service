@@ -173,7 +173,8 @@ async function translate(req, res) {
   const payload = JSON.parse((await readBody(req)).toString("utf8") || "{}");
   const text = typeof payload.text === "string" ? payload.text.trim() : "";
   const direction = payload.direction === "en-to-zh" ? "en-to-zh" : "zh-to-en";
-  const provider = payload.provider === "openai" || payload.provider === "deepseek" || payload.provider === "custom" || payload.provider === "offline" ? payload.provider : "auto";
+  const requestedProvider = payload.provider === "openai" || payload.provider === "deepseek" || payload.provider === "custom" || payload.provider === "offline" ? payload.provider : "auto";
+  const provider = requestedProvider === "offline" && process.env.DEEPSEEK_API_KEY ? "auto" : requestedProvider;
   const docType = typeof payload.docType === "string" ? payload.docType : "other";
   const templateText = typeof payload.templateText === "string" ? cleanTemplateText(payload.templateText).slice(0, TEMPLATE_TEXT_LIMIT) : "";
   const modelConfig = {
